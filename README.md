@@ -95,3 +95,26 @@ docker logs -f emrs          # 查看日志（含初始管理员密码）
 docker exec -it emrs sh      # 进入容器
 docker stop emrs && docker rm emrs   # 停止并移除（数据在卷中，不丢）
 ```
+
+## 二进制运行（Release 产物）
+
+每个 Release 附带三个产物：
+
+| 产物 | 说明 |
+|---|---|
+| `emrs-<tag>-x86_64-unknown-linux-musl` | Linux x86_64 静态二进制（无 glibc 依赖，裸文件不压缩） |
+| `emrs-<tag>-x86_64-pc-windows-msvc.exe` | Windows x86_64 可执行文件 |
+| `emrs-<tag>-docker.tar.gz` | Docker 镜像包（`docker load` 用） |
+
+SQLite 已内嵌编译、TLS 走纯 Rust（ring），二进制开箱即用。ffmpeg 由 `ffmpeg-sidecar` 首次运行时自动下载，也可自行安装 `ffmpeg`/`ffprobe` 到 `PATH`。
+
+```bash
+# Linux（下载即二进制，加执行权限运行）
+chmod +x emrs-v0.1.0-x86_64-unknown-linux-musl
+./emrs-v0.1.0-x86_64-unknown-linux-musl   # 在当前目录生成 emrs.yml 与 data/
+
+# Windows（PowerShell，直接运行）
+.\emrs-v0.1.0-x86_64-pc-windows-msvc.exe
+```
+
+首次运行若当前目录无 `emrs.yml`，程序会写入默认配置后退出并提示「请修改配置后重新启动」——按提示改完再启动即可。
