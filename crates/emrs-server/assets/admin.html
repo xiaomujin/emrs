@@ -140,10 +140,10 @@
     <div class="card tabpane hide" id="tab-jobs">
       <h2>扫描</h2>
       <div class="flex">
-        <input id="inScanPath" placeholder="指定路径（留空 = 扫描全部库根）" style="width:320px">
+        <select id="inScanPath" style="min-width:360px"></select>
         <button id="btnScan">开始扫描</button>
       </div>
-      <p class="msg">扫描为异步 job，完成后可轮询结果。重复路径已由服务端去重，不会翻倍。</p>
+      <p class="msg">选择一个媒体库路径扫描（默认全部库根）。扫描为异步 job，完成后可轮询结果。重复路径已由服务端去重，不会翻倍。</p>
       <h2 style="margin-top:18px">扫描进度</h2>
       <div class="flex"><span class="msg" id="scanStatus">-</span><button class="ghost" id="btnScanRefresh">刷新</button><button class="danger hide" id="btnScanCancel">取消扫描</button></div>
       <hr style="border:none;border-top:1px solid var(--line);margin:18px 0">
@@ -201,8 +201,12 @@
     <h2 id="libModalTitle">新建库</h2>
     <input type="hidden" id="libId">
     <div class="grid2">
-      <div><label>名称</label><br><input id="libName" style="width:100%"></div>
-      <div><label>路径</label><br><input id="libPath" style="width:100%" placeholder="如 D:\media 或 /mnt/media"></div>
+      <div class="full"><label>名称</label><br><input id="libName" style="width:100%"></div>
+    </div>
+    <div style="margin-top:12px">
+      <label>路径（一个媒体库可挂多个物理目录）</label>
+      <div id="libPaths" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>
+      <button type="button" class="ghost" id="btnAddPath" style="margin-top:8px">+ 添加路径</button>
     </div>
     <div style="margin-top:12px"><label>类型</label><br>
       <!-- 与 emrs-core::stores::COLLECTION_TYPES 保持一致（改后端列表须同步此处） -->
@@ -313,7 +317,7 @@ async function loadLibs(){
     $("#tbodyLibs").innerHTML = items.length ? items.map((l) => `
       <tr>
         <td>${l.id}</td><td>${esc(l.name)}</td><td>${esc(l.collection_type || 'tvshows')}</td>
-        <td class="mono">${esc(l.path)}</td><td class="mono">${esc(l.created_at)}</td>
+        <td class="mono">${(l.paths && l.paths.length) ? l.paths.map((p) => esc(p)).join("<br>") : "-"}</td><td class="mono">${esc(l.created_at)}</td>
         <td>
           <button class="ghost" onclick="editLib(${l.id})">编辑</button>
           <button class="danger" onclick="delLib(${l.id})">删除</button>
@@ -324,7 +328,7 @@ async function loadLibs(){
 function openLibModal(lib){
   $("#libId").value = lib ? lib.id : "";
   $("#libName").value = lib ? lib.name : "";
-  $("#libPath").value = (lib && lib.path) || "";
+  renderPathRows((lib && lib.paths) || []);
     // 回填 collection_type：若后端返回了未知值（手动改库/版本不匹配），退化为 "tvshows"
   const ct = (lib && lib.collection_type) || "tvshows";
   $("#libType").value = Array.from($("#libType").options).some(o => o.value === ct) ? ct : "tvshows";
@@ -341,15 +345,45 @@ async function delLib(id){
   catch(e){ alert(e.message); }
 }
 async function saveLib(){
-  const name = $("#libName").value.trim(), path = $("#libPath").value.trim();
-  if(!name || !path){ $("#errLibForm").textContent = "名称和路径不能为空"; return; }
+  const name = $("#libName").value.trim();
+  const paths = collectPaths();
+  if(!name || paths.length === 0){ $("#errLibForm").textContent = "名称和至少一个路径不能为空"; return; }
   const id = $("#libId").value;
-  const body = JSON.stringify({ name, path, collection_type: $("#libType").value });
+  const body = JSON.stringify({ name, paths, collection_type: $("#libType").value });
   try{
     await api(id ? "/admin/libraries/" + id : "/admin/libraries", { method: id ? "PUT" : "POST", body });
     $("#modalLib").classList.add("hide");
     loadLibs(); showToast(id ? "已更新" : "已创建");
   }catch(e){ $("#errLibForm").textContent = e.message; }
+}
+/* 挂载点动态行：新增/删除/回填/收集 */
+function addPathRow(value){
+  const row = document.createElement("div");
+  row.className = "lib-path-row";
+  row.style.cssText = "display:flex;gap:6px";
+  const input = document.createElement("input");
+  input.className = "lib-path-input";
+  input.style.flex = "1";
+  input.placeholder = "如 D:\\media 或 /mnt/media";
+  input.value = value || "";
+  const del = document.createElement("button");
+  del.type = "button"; del.className = "ghost"; del.textContent = "删除";
+  del.addEventListener("click", () => {
+    // 至少保留一行：删到只剩一行时清空而不删除
+    const box = $("#libPaths");
+    if(box.children.length > 1) row.remove(); else input.value = "";
+  });
+  row.appendChild(input); row.appendChild(del);
+  $("#libPaths").appendChild(row);
+}
+function renderPathRows(paths){
+  $("#libPaths").innerHTML = "";
+  const list = (paths && paths.length) ? paths : [""];
+  list.forEach((p) => addPathRow(p));
+}
+function collectPaths(){
+  return Array.from(document.querySelectorAll("#libPaths .lib-path-input"))
+    .map((i) => i.value.trim()).filter(Boolean);
 }
 
 /* ---------- 媒体 ---------- */
@@ -457,11 +491,23 @@ async function saveSettings(){
 /* ---------- 扫描 ---------- */
 let pollTimer = null;
 let activeScanJob = null;
+async function loadScanPaths(){
+  try{
+    const r = await api("/admin/libraries");
+    const items = (r && r.items) || [];
+    const opts = [];
+    items.forEach((l) => (l.paths || []).forEach((p) => {
+      opts.push(`<option value="${esc(p)}">${esc(l.name)} › ${esc(p)}</option>`);
+    }));
+    $("#inScanPath").innerHTML = '<option value="">全部库根</option>' + opts.join("");
+  }catch(e){ $("#inScanPath").innerHTML = '<option value="">全部库根</option>'; }
+}
 async function startScan(){
   const path = $("#inScanPath").value.trim();
-  const body = path ? JSON.stringify({ path }) : undefined;
+  // 始终发送合法 JSON body（留空 = {} = 扫描全部库根）；避免「空 body + json 头」被后端判为 JSON 解析错误 400。
+  const body = JSON.stringify(path ? { path } : {});
   try{
-    const r = await api("/admin/library/scan/start", { method:"POST", body, headers: body ? {} : { "Content-Type":"application/json" } });
+    const r = await api("/admin/library/scan/start", { method:"POST", body });
     showToast("扫描已启动，job: " + r.job_id);
     $("#scanStatus").textContent = "扫描中（job " + r.job_id + "）…";
     activeScanJob = r.job_id;
@@ -540,9 +586,10 @@ async function startProbe(force){
 /* ---------- 监听 ---------- */
 async function startWatch(){
   const roots = $("#inWatchRoots").value.split(",").map((s) => s.trim()).filter(Boolean);
-  const body = roots.length ? JSON.stringify({ roots }) : undefined;
+  // 始终发送合法 JSON body（留空 = {} = 监听全部库根）；避免空 body + json 头被判 400。
+  const body = JSON.stringify(roots.length ? { roots } : {});
   try{
-    const r = await api("/admin/library/watch/start", { method:"POST", body, headers: body ? {} : { "Content-Type":"application/json" } });
+    const r = await api("/admin/library/watch/start", { method:"POST", body });
     showToast("监听启动，watching=" + r.watching + (r.failed ? " failed=" + r.failed : ""));
     watchStatus();
   }catch(e){ showToast("启动失败：" + e.message); }
@@ -570,7 +617,7 @@ function refreshAll(){
   if(activeTab === "libraries") loadLibs();
   else if(activeTab === "media") loadMedia();
   else if(activeTab === "items") loadItems();
-  else if(activeTab === "jobs"){ loadScrapeLibs(); watchStatus(); }
+  else if(activeTab === "jobs"){ loadScanPaths(); loadScrapeLibs(); watchStatus(); }
   else if(activeTab === "settings") loadSettings();
 }
 function showToast(msg){
@@ -615,6 +662,7 @@ $("#inPassword").addEventListener("keydown", (e) => { if(e.key === "Enter") doLo
 $("#btnLogout").addEventListener("click", showLogin);
 $("#btnNewLib").addEventListener("click", () => openLibModal(null));
 $("#btnLibSave").addEventListener("click", saveLib);
+$("#btnAddPath").addEventListener("click", () => addPathRow(""));
 $("#btnScan").addEventListener("click", startScan);
 $("#btnScanRefresh").addEventListener("click", () => $("#scanStatus").textContent = "-");
 $("#btnScanCancel").addEventListener("click", cancelScan);

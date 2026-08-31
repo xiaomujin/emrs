@@ -49,27 +49,66 @@ pub(super) async fn start_scan(
     body: Option<axum::extract::Json<ScanInput>>,
 ) -> Response {
     let path = body.and_then(|axum::extract::Json(b)| b.path);
-    let roots: Vec<PathBuf> = match path {
-        Some(p) if !p.is_empty() => vec![PathBuf::from(p)],
-        _ => library_roots(&st).await,
+
+    // 解析要扫描的媒体库——扫描只作用于已登记的库，**绝不在扫描时新建库**（新建请到「媒体库」页）。
+    // 按 library_id 去重：一库多挂载点只入队一次（Pipeline 消费时按库扫描其全部 path，避免重复扫描）。
+    let libs: Vec<(i64, String)> = match path.as_deref().map(str::trim) {
+        Some(p) if !p.is_empty() => {
+            match sqlx::query_as::<_, (i64, String)>(
+                "SELECT l.id, l.name FROM library l \
+                 JOIN library_path lp ON lp.library_id = l.id \
+                 WHERE lp.path = ? LIMIT 1",
+            )
+            .bind(p)
+            .fetch_optional(st.db.pool())
+            .await
+            {
+                Ok(Some(row)) => vec![row],
+                Ok(None) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        "该路径未登记为媒体库，请先在「媒体库」页新建",
+                    )
+                        .into_response();
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "start_scan: resolve library failed");
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "扫描入队失败").into_response();
+                }
+            }
+        }
+        _ => match sqlx::query_as::<_, (i64, String)>(
+            "SELECT l.id, l.name FROM library l \
+             WHERE l.id IN (SELECT DISTINCT library_id FROM library_path) \
+             ORDER BY l.id",
+        )
+        .fetch_all(st.db.pool())
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::error!(error = %e, "start_scan: list libraries failed");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "扫描入队失败").into_response();
+            }
+        },
     };
-    if roots.is_empty() {
+    if libs.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            "无可扫描的库根（先创建库或传 path）",
+            "无可扫描的媒体库（先在「媒体库」页新建）",
         )
             .into_response();
     }
 
-    // 入队：每库根一行 scan_job(pending)；Pipeline scan 循环是唯一消费者
+    // 入队：每库一行 scan_job(pending)；Pipeline scan 循环是唯一消费者。
     let stage = ScanStage::new(st.db.clone());
-    let roots_display: Vec<String> = roots.iter().map(|p| p.display().to_string()).collect();
+    let roots_display: Vec<String> = libs.iter().map(|(_, n)| n.clone()).collect();
     let mut job_rows: Vec<i64> = Vec::new();
-    for root in &roots {
-        match stage.enqueue_library_scan(root, "admin").await {
+    for (lid, _) in &libs {
+        match stage.create_scan_job(*lid, "admin").await {
             Ok(id) => job_rows.push(id),
             Err(e) => {
-                tracing::warn!(root = %root.display(), error = %e, "扫描入队失败");
+                tracing::warn!(library_id = lid, error = %e, "扫描入队失败");
             }
         }
     }

@@ -529,10 +529,18 @@ impl Scanner {
             final_title
         };
 
-        // 先 upsert item(type=movie)
-        let item_id = self
-            .upsert_item(library_id, "movie", None, &final_title, None, None)
-            .await?;
+        // 先复用/创建 item(type=movie)。重扫以文件物理路径为锚复用已有条目,
+        // 避免 title 被刮削改写后按标题失配 → 同一文件重复入库。
+        let item_id = match self
+            .find_movie_item_by_path(library_id, &parsed.path_url)
+            .await?
+        {
+            Some(id) => id,
+            None => {
+                self.upsert_item(library_id, "movie", None, &final_title, None, None)
+                    .await?
+            }
+        };
 
         // NFO 元数据优先写入（高于 TMDB 刮削结果；NFO 已有的 id 不再覆盖）
         if let Some(ref nfo) = nfo {
@@ -554,53 +562,17 @@ impl Scanner {
         // 由 Scrape 阶段后台消费；NFO 的 tmdb_id 已经 update_item_meta 写入，
         // Scrape 会走按 ID 快路径。
 
-        // 删除旧 media_source 及外部字幕（幂等 upsert）
-        sqlx::query("DELETE FROM external_subtitle WHERE media_source_id IN (SELECT id FROM media_source WHERE item_id = ?)")
-            .bind(item_id)
-            .execute(self.db.pool())
-            .await?;
-        sqlx::query("DELETE FROM media_source WHERE item_id = ?")
-            .bind(item_id)
-            .execute(self.db.pool())
-            .await?;
-
-        // 插入 media_source
+        // 落 media_source：同路径重复文件保留旧行不 churn，否则替换该条目既有源。
         let name = strm_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
+        let (media_source_id, reused) = self
+            .upsert_media_source(item_id, name, parsed, meta, &now, &uuid)
+            .await?;
 
-        // 本地文件源进 Probe 队列（ffprobe 回填流信息后置 ok/failed）；
-        // http/strm 直链无本地文件可探，直接 ok。
-        let ms_status = if parsed.path_type == "local" {
-            "pending"
-        } else {
-            "ok"
-        };
-        let protocol = protocol_from_path_type(&parsed.path_type);
-        sqlx::query(
-            "INSERT INTO media_source (uuid, item_id, name, status, protocol, path, remote_path, container, file_size, file_duration, metadata, chapters, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&uuid)
-        .bind(item_id)
-        .bind(name)
-        .bind(ms_status)
-        .bind(&protocol)
-        .bind(if parsed.path_type == "local" { Some(&parsed.path_url) } else { None })
-        .bind(if parsed.path_type != "local" { Some(&parsed.path_url) } else { None })
-        .bind(&meta.container)
-        .bind(meta.file_size)
-        .bind(meta.file_second)
-        .bind(meta_metadata_json(meta))
-        .bind(meta_chapters_json(meta))
-        .bind(&now)
-        .bind(&now)
-        .execute(self.db.pool())
-        .await?;
-
-        // 外挂附件：字幕（内嵌流已存 media_source.metadata，不再写 external_subtitle）
-        let media_source_id = self.media_source_id_by_uuid(&uuid).await;
+        // 外挂附件：字幕（内嵌流已存 media_source.metadata，不再写 external_subtitle）。
+        // 复用/新插都跑——attach 幂等，补齐新增的外挂字幕文件。
         self.attach_subtitles_by_stem(media_source_id, stem, subtitle_files)
             .await;
 
@@ -609,9 +581,14 @@ impl Scanner {
             self.attach_image(item_id, "primary", &img_url).await;
         }
 
-        info!(title = %final_title, uuid, "导入电影");
-        stats.movies += 1;
-        stats.media += 1;
+        if reused {
+            info!(title = %final_title, "跳过重复电影源（保留既有 media_source）");
+            stats.skipped += 1;
+        } else {
+            info!(title = %final_title, uuid, "导入电影");
+            stats.movies += 1;
+            stats.media += 1;
+        }
         Ok(())
     }
 
@@ -643,19 +620,26 @@ impl Scanner {
 
         // 若父目录是季目录 → series=祖父目录、season=目录名；
         // 否则父目录即剧名目录 → series=父目录、season=文件名解析。
-        let (series_name, mut season_number) = if season_from_dir >= 0 {
-            let series = grandparent
-                .and_then(|p| p.file_name())
+        let (series_dir_path, series_name, mut season_number) = if season_from_dir >= 0 {
+            let gp = grandparent.unwrap_or(parent);
+            let series = gp
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("Unknown Series")
                 .to_string();
-            (series, season_from_dir)
+            (gp, series, season_from_dir)
         } else {
-            (season_dir.to_string(), pn.season)
+            (parent, season_dir.to_string(), pn.season)
         };
         if season_number <= 0 {
             season_number = 1;
         }
+        // series 磁盘目录锚（归一化绝对路径）：同一剧跨扫描稳定、新增集文件同目录，
+        // 供 upsert_series_item 复用，替代会被刮削改写的 title。
+        let series_dir = series_dir_path
+            .canonicalize()
+            .map(|p| normalize_canonical_path(&p))
+            .unwrap_or_else(|_| series_dir_path.to_string_lossy().replace('\\', "/"));
 
         // 集号：优先文件名解析，回退纯数字
         let episode_number: i64 = if pn.episode > 0 {
@@ -671,9 +655,11 @@ impl Scanner {
             .find(|p| p.file_stem().and_then(|s| s.to_str()) == Some(stem))
             .and_then(|p| nfo::read_nfo(p));
 
-        // 1. 创建/获取 Series item
+        // 1. 创建/获取 Series item。以剧集磁盘目录 source_dir 为稳定身份锚复用，
+        //    避免 series.title 被刮削改写后按目录名失配 → 重复建整棵
+        //    series/season/episode；新增一集文件也命中同一目录，不再重复建 series。
         let series_item_id = self
-            .upsert_item(library_id, "series", None, &series_name, None, None)
+            .upsert_series_item(library_id, &series_name, &series_dir)
             .await?;
 
         // NFO Series 元数据（从 strm 所在目录逐级向上找 tvshow.nfo）
@@ -786,53 +772,17 @@ impl Scanner {
             }
         }
 
-        // 4. 删除旧 media_source 及外部字幕
-        sqlx::query("DELETE FROM external_subtitle WHERE media_source_id IN (SELECT id FROM media_source WHERE item_id = ?)")
-            .bind(episode_item_id)
-            .execute(self.db.pool())
-            .await?;
-        sqlx::query("DELETE FROM media_source WHERE item_id = ?")
-            .bind(episode_item_id)
-            .execute(self.db.pool())
-            .await?;
-
-        // 5. 插入 media_source
+        // 4. 落 media_source：同路径重复文件保留旧行不 churn，否则替换该条目既有源。
         let name = strm_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
+        let (media_source_id, reused) = self
+            .upsert_media_source(episode_item_id, name, parsed, meta, &now, &uuid)
+            .await?;
 
-        // 本地文件源进 Probe 队列（ffprobe 回填流信息后置 ok/failed）；
-        // http/strm 直链无本地文件可探，直接 ok。
-        let ms_status = if parsed.path_type == "local" {
-            "pending"
-        } else {
-            "ok"
-        };
-        let protocol = protocol_from_path_type(&parsed.path_type);
-        sqlx::query(
-            "INSERT INTO media_source (uuid, item_id, name, status, protocol, path, remote_path, container, file_size, file_duration, metadata, chapters, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&uuid)
-        .bind(episode_item_id)
-        .bind(name)
-        .bind(ms_status)
-        .bind(&protocol)
-        .bind(if parsed.path_type == "local" { Some(&parsed.path_url) } else { None })
-        .bind(if parsed.path_type != "local" { Some(&parsed.path_url) } else { None })
-        .bind(&meta.container)
-        .bind(meta.file_size)
-        .bind(meta.file_second)
-        .bind(meta_metadata_json(meta))
-        .bind(meta_chapters_json(meta))
-        .bind(&now)
-        .bind(&now)
-        .execute(self.db.pool())
-        .await?;
-
-        // 外挂附件：字幕（内嵌流已存 media_source.metadata，不再写 external_subtitle）
-        let media_source_id = self.media_source_id_by_uuid(&uuid).await;
+        // 外挂附件：字幕（内嵌流已存 media_source.metadata，不再写 external_subtitle）。
+        // attach 幂等，复用/新插都跑以补齐新增字幕文件。
         self.attach_subtitles_by_stem(media_source_id, stem, subtitle_files)
             .await;
 
@@ -842,12 +792,20 @@ impl Scanner {
                 .await;
         }
 
-        info!(series_name, season_number, episode_number, uuid, "导入剧集");
-        if stats.series == 0 {
-            stats.series += 1;
+        if reused {
+            info!(
+                series_name,
+                season_number, episode_number, "跳过重复剧集源（保留既有 media_source）"
+            );
+            stats.skipped += 1;
+        } else {
+            info!(series_name, season_number, episode_number, uuid, "导入剧集");
+            if stats.series == 0 {
+                stats.series += 1;
+            }
+            stats.episodes += 1;
+            stats.media += 1;
         }
-        stats.episodes += 1;
-        stats.media += 1;
         Ok(())
     }
 
@@ -859,7 +817,9 @@ impl Scanner {
     async fn upsert_library(&self, name: &str, path: &str) -> Result<i64> {
         let now = crate::emby::format_time_now();
 
-        // 先按 library_path.path 查 library_path，找到则取 library_id
+        // 先按 library_path.path 查 library_path，找到则取 library_id。
+        // 命中已存在库时**不改名**——库名由 admin 建库时用户指定，扫描只负责入库条目，
+        // 绝不能用文件夹 basename 覆盖用户设定的库名。
         let existing_lib_id: Option<i64> =
             sqlx::query_scalar("SELECT library_id FROM library_path WHERE path = ? LIMIT 1")
                 .bind(path)
@@ -867,16 +827,11 @@ impl Scanner {
                 .await?;
 
         if let Some(lib_id) = existing_lib_id {
-            // 更新 library name
-            sqlx::query("UPDATE library SET name = ?, updated_at = ? WHERE id = ?")
-                .bind(name)
-                .bind(&now)
-                .bind(lib_id)
-                .execute(self.db.pool())
-                .await?;
-            Ok(lib_id)
-        } else {
-            // 新建 library
+            return Ok(lib_id);
+        }
+
+        // 新建 library（首次扫描该路径：CLI / watch / 手输路径，用文件夹名兜底命名）
+        {
             sqlx::query("INSERT INTO library (name, created_at, updated_at) VALUES (?, ?, ?)")
                 .bind(name)
                 .bind(&now)
@@ -999,6 +954,92 @@ impl Scanner {
         }
     }
 
+    /// 重扫去重锚点:按媒体文件物理路径查已存在的 movie 条目。
+    ///
+    /// `item.title` 会被 Scrape 改写为 TMDB 标题,不能作跨扫描的稳定身份;
+    /// `media_source.path`(本地)/`remote_path`(strm/直链)存的是文件路径,
+    /// 同库同文件重扫必然命中,故以它为复用锚。命中返回其 item_id,
+    /// 未命中(首次扫描该文件)返回 None,调用方回退到按 title 的 upsert。
+    async fn find_movie_item_by_path(&self, library_id: i64, path: &str) -> Result<Option<i64>> {
+        let id = sqlx::query_scalar::<_, i64>(
+            "SELECT i.id FROM item i \
+             JOIN media_source ms ON ms.item_id = i.id \
+             WHERE i.library_id = ? AND i.type = 'movie' \
+               AND (ms.path = ? OR ms.remote_path = ?) \
+             ORDER BY i.id LIMIT 1",
+        )
+        .bind(library_id)
+        .bind(path)
+        .bind(path)
+        .fetch_optional(self.db.pool())
+        .await?;
+        Ok(id)
+    }
+
+    /// 创建或获取 series 条目,以剧集磁盘目录 `source_dir` 为稳定身份锚。
+    ///
+    /// series.title 会被 Scrape 改写为 TMDB 标题,不能作跨扫描去重键;而剧集在磁盘上的
+    /// 目录对同一剧稳定、且新增一集文件仍落在同目录下。匹配顺序:
+    /// 1. 按 (library_id, type='series', source_dir) 命中 → 复用;
+    /// 2. 未命中再按 title 命中(兼容 source_dir 引入前的历史 NULL 行)→ 回填 source_dir 后复用;
+    /// 3. 都未命中 → 新建并写入 source_dir。
+    ///
+    /// 注:并发重复由外层 SCAN_MUTEX 串行化 + SELECT-then-INSERT 保证(schema 无唯一约束兜底)。
+    async fn upsert_series_item(
+        &self,
+        library_id: i64,
+        series_name: &str,
+        series_dir: &str,
+    ) -> Result<i64> {
+        let now = crate::emby::format_time_now();
+
+        if let Some(id) = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM item WHERE library_id = ? AND type = 'series' AND source_dir = ? LIMIT 1",
+        )
+        .bind(library_id)
+        .bind(series_dir)
+        .fetch_optional(self.db.pool())
+        .await?
+        {
+            return Ok(id);
+        }
+
+        // 兼容历史行:source_dir 列引入前建的 series 该列为 NULL,按 title 命中则回填并复用。
+        if let Some(id) = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM item WHERE library_id = ? AND type = 'series' \
+             AND source_dir IS NULL AND title = ? LIMIT 1",
+        )
+        .bind(library_id)
+        .bind(series_name)
+        .fetch_optional(self.db.pool())
+        .await?
+        {
+            let _ = sqlx::query("UPDATE item SET source_dir = ?, updated_at = ? WHERE id = ?")
+                .bind(series_dir)
+                .bind(&now)
+                .bind(id)
+                .execute(self.db.pool())
+                .await;
+            return Ok(id);
+        }
+
+        sqlx::query(
+            "INSERT INTO item (type, parent_id, library_id, scrape_status, title, source_dir, created_at, updated_at) \
+             VALUES ('series', NULL, ?, 'pending', ?, ?, ?, ?)",
+        )
+        .bind(library_id)
+        .bind(series_name)
+        .bind(series_dir)
+        .bind(&now)
+        .bind(&now)
+        .execute(self.db.pool())
+        .await?;
+        let id = sqlx::query_scalar::<_, i64>("SELECT id FROM item ORDER BY id DESC LIMIT 1")
+            .fetch_one(self.db.pool())
+            .await?;
+        Ok(id)
+    }
+
     /// 合并更新 item 元数据（COALESCE 语义：仅填充非空字段，不覆盖已有值）。
     #[allow(clippy::too_many_arguments)]
     async fn update_item_meta(
@@ -1065,6 +1106,77 @@ impl Scanner {
             .fetch_optional(self.db.pool())
             .await
             .unwrap_or(None)
+    }
+
+    /// 为条目落一个媒体源（幂等，重复不churn）。返回 `(media_source.id, 是否复用旧行)`。
+    ///
+    /// 重复检测:该 item 下若已有**同物理路径**（`path`/`remote_path` = `parsed.path_url`）
+    /// 的 media_source,视为同一文件重复扫描 → **原样保留旧行**（uuid、探测结果 status、
+    /// 外挂字幕一律不动,不 UPDATE / 不删 / 不插）,返回 `(旧id, true)`。
+    /// 否则替换该条目的既有源:删旧 media_source + 外部字幕,插入新行,返回 `(新id, false)`。
+    ///
+    /// 旧逻辑无论路径是否相同都 `DELETE WHERE item_id` 再 INSERT,导致每次重扫复位
+    /// `status='pending'` 触发全量重探、更换 uuid、重挂字幕——本函数即修复此问题。
+    async fn upsert_media_source(
+        &self,
+        item_id: i64,
+        name: &str,
+        parsed: &super::strm::StrmPath,
+        meta: &MediaMeta,
+        now: &str,
+        uuid: &str,
+    ) -> Result<(Option<i64>, bool)> {
+        let existing: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM media_source WHERE item_id = ? AND (path = ? OR remote_path = ?) LIMIT 1",
+        )
+        .bind(item_id)
+        .bind(&parsed.path_url)
+        .bind(&parsed.path_url)
+        .fetch_optional(self.db.pool())
+        .await?;
+        if existing.is_some() {
+            return Ok((existing, true));
+        }
+
+        // 路径未命中（首次，或该条目既有源指向其它文件）→ 替换该条目的旧源与外部字幕。
+        sqlx::query("DELETE FROM external_subtitle WHERE media_source_id IN (SELECT id FROM media_source WHERE item_id = ?)")
+            .bind(item_id)
+            .execute(self.db.pool())
+            .await?;
+        sqlx::query("DELETE FROM media_source WHERE item_id = ?")
+            .bind(item_id)
+            .execute(self.db.pool())
+            .await?;
+
+        // 本地文件源进 Probe 队列（ffprobe 回填流信息后置 ok/failed）；
+        // http/strm 直链无本地文件可探，直接 ok。
+        let ms_status = if parsed.path_type == "local" {
+            "pending"
+        } else {
+            "ok"
+        };
+        let protocol = protocol_from_path_type(&parsed.path_type);
+        sqlx::query(
+            "INSERT INTO media_source (uuid, item_id, name, status, protocol, path, remote_path, container, file_size, file_duration, metadata, chapters, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(uuid)
+        .bind(item_id)
+        .bind(name)
+        .bind(ms_status)
+        .bind(&protocol)
+        .bind(if parsed.path_type == "local" { Some(&parsed.path_url) } else { None })
+        .bind(if parsed.path_type != "local" { Some(&parsed.path_url) } else { None })
+        .bind(&meta.container)
+        .bind(meta.file_size)
+        .bind(meta.file_second)
+        .bind(meta_metadata_json(meta))
+        .bind(meta_chapters_json(meta))
+        .bind(now)
+        .bind(now)
+        .execute(self.db.pool())
+        .await?;
+        Ok((self.media_source_id_by_uuid(uuid).await, false))
     }
 
     /// 按文件名前缀匹配并关联同目录字幕文件到 media_source（外部字幕）。

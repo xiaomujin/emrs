@@ -13,7 +13,9 @@ use crate::state::AppState;
 #[derive(Deserialize)]
 pub(super) struct LibraryInput {
     name: String,
-    path: String,
+    /// 同一媒体库的多个物理挂载点（至少一个）。
+    #[serde(default)]
+    paths: Vec<String>,
     collection_type: Option<String>,
 }
 
@@ -31,32 +33,102 @@ async fn normalize_library_path(path: &str) -> String {
     }
 }
 
+/// 解析有效原始路径列表：逐项去首尾空白并丢弃空串。不做归一化
+/// （归一化统一交给 [`normalize_paths`]，那里按归一值去重）。
+fn resolve_raw_paths(input: &LibraryInput) -> Vec<String> {
+    input
+        .paths
+        .iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// 逐个归一化并按归一值去重（保序）。返回归一化后的非空路径列表。
+async fn normalize_paths(raw: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    for p in raw {
+        let n = normalize_library_path(p).await;
+        if !n.is_empty() && !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// 查一个库的全部挂载点路径（按 sort_order, id 排序）。
+async fn fetch_library_paths(
+    pool: &sqlx::AnyPool,
+    library_id: i64,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT path FROM library_path WHERE library_id = ? ORDER BY sort_order, id",
+    )
+    .bind(library_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// 批量查多个库的挂载点，返回 `library_id -> [path...]`（各自按 sort_order, id 排序）。
+async fn fetch_paths_by_library(
+    pool: &sqlx::AnyPool,
+) -> Result<std::collections::HashMap<i64, Vec<String>>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, (i64, String)>(
+        "SELECT library_id, path FROM library_path ORDER BY library_id, sort_order, id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut map: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    for (lib_id, path) in rows {
+        map.entry(lib_id).or_default().push(path);
+    }
+    Ok(map)
+}
+
+/// 向 library_path 写入一批挂载点（按列表顺序赋 sort_order，path_type 固定 local）。
+/// 供 create 复用；update 走事务内先 DELETE 再本函数重插。
+async fn insert_library_paths(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    library_id: i64,
+    paths: &[String],
+    now: &str,
+) -> Result<(), sqlx::Error> {
+    for (i, p) in paths.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO library_path (library_id, path, path_type, sort_order, updated_at) \
+             VALUES (?, ?, 'local', ?, ?)",
+        )
+        .bind(library_id)
+        .bind(p)
+        .bind(i as i64)
+        .bind(now)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
 /// GET /admin/libraries：列出所有库。
 pub(super) async fn list_libraries(State(st): State<AppState>) -> Response {
-    // LEFT JOIN 取每个库首个挂载点的 path（按 sort_order, id 排序）。
-    // 列表/详情必须回填 path，否则前端编辑弹窗会把 input.value 设成 JS undefined，
-    // 保存时把字符串 "undefined" 写回 library_path（覆盖真实路径）。
-    let rows = sqlx::query_as::<_, (i64, String, String, String, String)>(
-        "SELECT l.id, l.name, COALESCE(lp.path, '') AS path, l.created_at, l.collection_type \
-         FROM library l \
-         LEFT JOIN library_path lp ON lp.id = (\
-             SELECT id FROM library_path \
-             WHERE library_id = l.id \
-             ORDER BY sort_order, id LIMIT 1) \
-         ORDER BY l.id",
+    // 返回全部挂载点 paths（按 sort_order, id 排序）。
+    // 一次批取所有 library_path 分组，避免逐库查询的 N+1。
+    let lib_rows = sqlx::query_as::<_, (i64, String, String, String)>(
+        "SELECT id, name, created_at, collection_type FROM library ORDER BY id",
     )
     .fetch_all(st.db.pool())
     .await;
+    let paths_map = fetch_paths_by_library(st.db.pool()).await;
 
-    match rows {
-        Ok(list) => {
+    match (lib_rows, paths_map) {
+        (Ok(list), Ok(map)) => {
             let items: Vec<Value> = list
                 .into_iter()
-                .map(|(id, name, path, created_at, collection_type)| {
+                .map(|(id, name, created_at, collection_type)| {
+                    let paths = map.get(&id).cloned().unwrap_or_default();
                     json!({
                         "id": id,
                         "name": name,
-                        "path": path,
+                        "paths": paths,
                         "created_at": created_at,
                         "collection_type": collection_type,
                     })
@@ -64,7 +136,7 @@ pub(super) async fn list_libraries(State(st): State<AppState>) -> Response {
                 .collect();
             axum::Json(json!({ "items": items })).into_response()
         }
-        Err(e) => {
+        (Err(e), _) | (_, Err(e)) => {
             tracing::error!(error = %e, "list_libraries failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
@@ -76,8 +148,9 @@ pub(super) async fn create_library(
     State(st): State<AppState>,
     axum::extract::Json(body): axum::extract::Json<LibraryInput>,
 ) -> Response {
-    if body.name.is_empty() || body.path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "name 和 path 不能为空").into_response();
+    let raw = resolve_raw_paths(&body);
+    if body.name.is_empty() || raw.is_empty() {
+        return (StatusCode::BAD_REQUEST, "name 和至少一个 path 不能为空").into_response();
     }
     if let Some(ct) = &body.collection_type
         && !emrs_core::stores::is_valid_collection_type(ct)
@@ -88,57 +161,51 @@ pub(super) async fn create_library(
         )
             .into_response();
     }
-    let path = normalize_library_path(&body.path).await;
+    let paths = normalize_paths(&raw).await;
+    if paths.is_empty() {
+        return (StatusCode::BAD_REQUEST, "路径非法（归一化后为空）").into_response();
+    }
 
-    // 按 path 去重：同路径库已存在时直接返回已有 id（防重复建库导致扫描翻倍）
-    if let Ok(Some(id)) = sqlx::query_scalar::<_, i64>(
-        "SELECT lp.library_id FROM library_path lp \
-         JOIN library l ON l.id = lp.library_id \
-         WHERE lp.path = ? LIMIT 1",
-    )
-    .bind(&path)
-    .fetch_optional(st.db.pool())
-    .await
+    // 单路径去重：同路径库已存在时直接返回已有 id（防重复建库导致扫描翻倍）。
+    // 多路径新建不去重——用户显式声明一个新库的多挂载点，语义上应新建。
+    if paths.len() == 1
+        && let Ok(Some(id)) = sqlx::query_scalar::<_, i64>(
+            "SELECT lp.library_id FROM library_path lp \
+             JOIN library l ON l.id = lp.library_id \
+             WHERE lp.path = ? LIMIT 1",
+        )
+        .bind(&paths[0])
+        .fetch_optional(st.db.pool())
+        .await
     {
-        return axum::Json(json!({ "id": id, "name": body.name, "path": path, "existing": true }))
+        return axum::Json(json!({ "id": id, "name": body.name, "existing": true }))
             .into_response();
     }
 
-    match sqlx::query("INSERT INTO library (name, collection_type) VALUES (?, ?)")
-        .bind(&body.name)
-        .bind(body.collection_type.as_deref().unwrap_or("tvshows"))
-        .execute(st.db.pool())
-        .await
-    {
-        Ok(_) => {
-            // sqlx Any 池下 last_insert_id 不可靠，回查取 id（三方言通用）
-            let id: i64 = match sqlx::query_scalar::<_, i64>(
-                "SELECT id FROM library WHERE name = ? \
-                 ORDER BY id DESC LIMIT 1",
-            )
+    let now = emrs_core::emby::format_time_now();
+    let result: Result<i64, sqlx::Error> = async {
+        let mut tx = st.db.pool().begin().await?;
+        sqlx::query("INSERT INTO library (name, collection_type) VALUES (?, ?)")
             .bind(&body.name)
-            .fetch_one(st.db.pool())
-            .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!(error = %e, "create_library: fetch id failed");
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "创建失败").into_response();
-                }
-            };
-            // 写入 library_path 挂载点
-            if let Err(e) = sqlx::query(
-                "INSERT INTO library_path (library_id, path, path_type) VALUES (?, ?, 'local')",
-            )
-            .bind(id)
-            .bind(&path)
-            .execute(st.db.pool())
-            .await
-            {
-                tracing::error!(error = %e, "create_library: insert library_path failed");
-                return (StatusCode::INTERNAL_SERVER_ERROR, "创建失败").into_response();
-            }
-            axum::Json(json!({ "id": id, "name": body.name, "path": path })).into_response()
+            .bind(body.collection_type.as_deref().unwrap_or("tvshows"))
+            .execute(&mut *tx)
+            .await?;
+        // sqlx Any 池下 last_insert_id 不可靠，回查取 id（三方言通用）
+        let id: i64 = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM library WHERE name = ? ORDER BY id DESC LIMIT 1",
+        )
+        .bind(&body.name)
+        .fetch_one(&mut *tx)
+        .await?;
+        insert_library_paths(&mut tx, id, &paths, &now).await?;
+        tx.commit().await?;
+        Ok(id)
+    }
+    .await;
+
+    match result {
+        Ok(id) => {
+            axum::Json(json!({ "id": id, "name": body.name, "paths": paths })).into_response()
         }
         Err(e) => {
             tracing::error!(error = %e, "create_library failed");
@@ -147,30 +214,29 @@ pub(super) async fn create_library(
     }
 }
 
-/// GET /admin/libraries/{id}：查单个库。
+/// GET /admin/libraries/{id}：查单个库（含全部挂载点 paths）。
 pub(super) async fn get_library(State(st): State<AppState>, Path(id): Path<i64>) -> Response {
-    let row = sqlx::query_as::<_, (i64, String, String, String, String)>(
-        "SELECT l.id, l.name, COALESCE(lp.path, '') AS path, l.created_at, l.collection_type \
-         FROM library l \
-         LEFT JOIN library_path lp ON lp.id = (\
-             SELECT id FROM library_path \
-             WHERE library_id = l.id \
-             ORDER BY sort_order, id LIMIT 1) \
-         WHERE l.id = ? LIMIT 1",
+    let row = sqlx::query_as::<_, (i64, String, String, String)>(
+        "SELECT id, name, created_at, collection_type FROM library WHERE id = ? LIMIT 1",
     )
     .bind(id)
     .fetch_optional(st.db.pool())
     .await;
 
     match row {
-        Ok(Some((id, name, path, created_at, collection_type))) => axum::Json(json!({
-            "id": id,
-            "name": name,
-            "path": path,
-            "created_at": created_at,
-            "collection_type": collection_type,
-        }))
-        .into_response(),
+        Ok(Some((lid, name, created_at, collection_type))) => {
+            let paths = fetch_library_paths(st.db.pool(), lid)
+                .await
+                .unwrap_or_default();
+            axum::Json(json!({
+                "id": lid,
+                "name": name,
+                "paths": paths,
+                "created_at": created_at,
+                "collection_type": collection_type,
+            }))
+            .into_response()
+        }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
             tracing::error!(error = %e, "get_library failed");
@@ -179,14 +245,16 @@ pub(super) async fn get_library(State(st): State<AppState>, Path(id): Path<i64>)
     }
 }
 
-/// PUT /admin/libraries/{id}：更新库。
+/// PUT /admin/libraries/{id}：更新库（名称/类型 + 全量重设挂载点集合）。
 pub(super) async fn update_library(
     State(st): State<AppState>,
     Path(id): Path<i64>,
     axum::extract::Json(body): axum::extract::Json<LibraryInput>,
 ) -> Response {
-    let now = emrs_core::emby::format_time_now();
-    // 先校验 collection_type（fail-fast，与 create_library 一致），再做路径 canonicalize。
+    // 先校验（fail-fast，与 create_library 一致），再做路径 canonicalize。
+    if body.name.is_empty() {
+        return (StatusCode::BAD_REQUEST, "name 不能为空").into_response();
+    }
     if let Some(ct) = &body.collection_type
         && !emrs_core::stores::is_valid_collection_type(ct)
     {
@@ -196,31 +264,45 @@ pub(super) async fn update_library(
         )
             .into_response();
     }
-    let path = normalize_library_path(&body.path).await;
-    match sqlx::query(
-        "UPDATE library SET name = ?, collection_type = COALESCE(?, collection_type), updated_at = ? WHERE id = ?",
-    )
-    .bind(&body.name)
-    .bind(&body.collection_type)
-    .bind(&now)
-    .bind(id)
-    .execute(st.db.pool())
-    .await
-    {
-        Ok(r) if r.rows_affected() > 0 => {
-            // Update or insert library_path mount point
-            let _ = sqlx::query(
-                "UPDATE library_path SET path = ?, updated_at = ? \
-                 WHERE library_id = ?",
-            )
-            .bind(&path)
-            .bind(&now)
-            .bind(id)
-            .execute(st.db.pool())
-            .await;
-            StatusCode::OK.into_response()
+    let raw = resolve_raw_paths(&body);
+    if raw.is_empty() {
+        return (StatusCode::BAD_REQUEST, "至少需要一个 path").into_response();
+    }
+    let paths = normalize_paths(&raw).await;
+    if paths.is_empty() {
+        return (StatusCode::BAD_REQUEST, "路径非法（归一化后为空）").into_response();
+    }
+
+    let now = emrs_core::emby::format_time_now();
+    let result: Result<bool, sqlx::Error> = async {
+        let mut tx = st.db.pool().begin().await?;
+        let r = sqlx::query(
+            "UPDATE library SET name = ?, collection_type = COALESCE(?, collection_type), updated_at = ? WHERE id = ?",
+        )
+        .bind(&body.name)
+        .bind(&body.collection_type)
+        .bind(&now)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        if r.rows_affected() == 0 {
+            // 库不存在：回滚（无副作用）
+            return Ok(false);
         }
-        Ok(_) => StatusCode::NOT_FOUND.into_response(),
+        // 全量重设挂载点：无外部引用 library_path.id，删除重插最稳妥（保留库内路径唯一性由 sort_order 序号保证）。
+        sqlx::query("DELETE FROM library_path WHERE library_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        insert_library_paths(&mut tx, id, &paths, &now).await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+    .await;
+
+    match result {
+        Ok(true) => StatusCode::OK.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
             tracing::error!(error = %e, "update_library failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()

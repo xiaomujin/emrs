@@ -154,7 +154,7 @@ async fn scan_job_lifecycle() {
             Request::post("/admin/libraries")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({ "name": "扫描任务测试库", "path": lib.display().to_string() })
+                    json!({ "name": "扫描任务测试库", "paths": [lib.display().to_string()] })
                         .to_string(),
                 ))
                 .unwrap(),
@@ -346,7 +346,8 @@ async fn scrape_job_lifecycle_without_key() {
             Request::post("/admin/libraries")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({ "name": "刮削测试库", "path": lib.display().to_string() }).to_string(),
+                    json!({ "name": "刮削测试库", "paths": [lib.display().to_string()] })
+                        .to_string(),
                 ))
                 .unwrap(),
             &token,

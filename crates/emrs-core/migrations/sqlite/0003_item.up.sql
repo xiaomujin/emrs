@@ -14,6 +14,9 @@ CREATE TABLE item (
     tvdb_id          TEXT,
     title            TEXT    NOT NULL,
     sort_title       TEXT,
+    -- series 专用：剧集在磁盘上的目录路径（归一化正斜杠绝对路径），作跨扫描/新增文件的
+    -- series 稳定身份锚（title 会被刮削改写，不能去重）。movie/season/episode 恒 NULL。
+    source_dir       TEXT,
     description      TEXT,
     tagline          TEXT,
     date_air         TEXT,
