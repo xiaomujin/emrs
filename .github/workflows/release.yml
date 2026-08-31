@@ -1,0 +1,62 @@
+name: Release Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布标签（如 v0.1.0），手动触发时用于命名 Release 与镜像'
+        required: true
+        default: 'dev'
+
+permissions:
+  contents: write
+
+env:
+  IMAGE_NAME: emrs
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export image to tar.gz
+        run: |
+          out="${{ env.IMAGE_NAME }}-${{ steps.tag.outputs.tag }}-docker.tar.gz"
+          docker save "${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" | gzip > "$out"
+          ls -lh "$out"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ github.event_name == 'workflow_dispatch' }}
+          files: ${{ env.IMAGE_NAME }}-${{ steps.tag.outputs.tag }}-docker.tar.gz

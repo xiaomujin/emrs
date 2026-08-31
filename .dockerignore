@@ -1,0 +1,13 @@
+target/
+.git/
+.idea/
+.claude/
+.codex/
+.cargo/
+data/
+logs/
+docs/
+emby_json/
+emrs.yml
+*.md
+*.tar.gz
