@@ -57,6 +57,13 @@
   .logout{margin-left:auto}
   .hint{font-size:12px;color:var(--muted);line-height:1.7}
   .toast{position:fixed;right:16px;bottom:16px;padding:10px 16px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);font-size:13px;max-width:380px;z-index:99;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+  /* 媒体树 */
+  .tree-row{display:flex;align-items:center;gap:6px;padding:4px 6px;font-size:13px;border-radius:6px}
+  .tree-row:hover{background:#202945}
+  .twisty{width:16px;flex:none;text-align:center;cursor:pointer;color:var(--muted);user-select:none}
+  .twisty.leaf{cursor:default;color:var(--line)}
+  .tree-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tree-meta{color:var(--muted);font-size:12px;font-family:Consolas,Menlo,monospace;word-break:break-all}
 </style>
 </head>
 <body>
@@ -103,14 +110,15 @@
       </table></div>
     </div>
 
-    <!-- 媒体 -->
+    <!-- 媒体（树形：库 → 剧 → 季 → 集，点击逐层展开） -->
     <div class="card tabpane hide" id="tab-media">
-      <h2>媒体列表（最近 200 条）</h2>
+      <div class="flex" style="justify-content:space-between">
+        <h2>媒体树</h2>
+        <button class="ghost" id="btnMediaRefresh">刷新</button>
+      </div>
+      <p class="msg">按 媒体库 › 剧 › 季 › 集 逐层展开，点击 ▶ 才请求该层（折叠后再展开会重新拉取）。</p>
       <p class="errbox" id="errMedia"></p>
-      <div style="overflow:auto"><table>
-        <thead><tr><th>UUID</th><th>名称</th><th>类型</th><th>路径 / 直链</th><th>库 ID</th></tr></thead>
-        <tbody id="tbodyMedia"></tbody>
-      </table></div>
+      <div id="mediaTree"></div>
     </div>
 
     <!-- 条目（按刮削状态） -->
@@ -386,21 +394,97 @@ function collectPaths(){
     .map((i) => i.value.trim()).filter(Boolean);
 }
 
-/* ---------- 媒体 ---------- */
-async function loadMedia(){
+/* ---------- 媒体树（库 → 剧 → 季 → 集，单层懒加载） ---------- */
+const INDENT = 18;
+const TYPE_LABEL = { library: "库", movie: "电影", series: "剧", season: "季", episode: "集" };
+
+async function loadMediaTree(){
   const box = $("#errMedia"); box.textContent = "";
+  const root = $("#mediaTree"); root.innerHTML = "";
   try{
-    const r = await api("/admin/media");
-    const items = (r && r.items) || [];
-    $("#tbodyMedia").innerHTML = items.length ? items.map((m) => `
-      <tr>
-        <td class="mono">${esc(m.uuid)}</td>
-        <td>${esc(m.name)}</td>
-        <td><span class="tag">${esc(m.path_type)}</span></td>
-        <td class="mono">${esc(m.path_url)}</td>
-        <td>${m.item_id || "-"}</td>
-      </tr>`).join("") : `<tr><td colspan="5" style="color:var(--muted)">暂无媒体，先导入 STRM 或创建库并扫描。</td></tr>`;
+    const r = await api("/admin/libraries");
+    const libs = (r && r.items) || [];
+    if(!libs.length){ root.innerHTML = `<div class="msg">暂无媒体库，先到「库管理」创建。</div>`; return; }
+    libs.forEach((l) => root.appendChild(renderTreeNode({
+      id: l.id, title: l.name, type: "library", has_children: true, collection_type: l.collection_type,
+    }, 0)));
   }catch(e){ box.textContent = "加载失败：" + e.message; }
+}
+
+function treeTitle(item){
+  if(item.title) return item.title;
+  if(item.type === "season" && item.season_number != null) return "第 " + item.season_number + " 季";
+  if(item.type === "episode" && item.episode_number != null) return "第 " + item.episode_number + " 集";
+  return item.type;
+}
+
+function renderTreeNode(item, level){
+  const wrap = document.createElement("div");
+  wrap.className = "tree-node";
+
+  const row = document.createElement("div");
+  row.className = "tree-row";
+  row.style.paddingLeft = (level * INDENT) + "px";
+
+  const expandable = !!item.has_children;
+  const twisty = document.createElement("span");
+  twisty.className = "twisty" + (expandable ? "" : " leaf");
+  twisty.textContent = expandable ? "▶" : "•";
+
+  const title = document.createElement("span");
+  title.className = "tree-title";
+  title.innerHTML = `<span class="tag">${esc(TYPE_LABEL[item.type] || item.type)}</span> ${esc(treeTitle(item))}`;
+
+  row.appendChild(twisty);
+  row.appendChild(title);
+
+  if(item.type === "episode"){
+    if(item.is_virtual){
+      row.insertAdjacentHTML("beforeend", ` <span class="tag fail">缺失</span>`);
+    } else if(item.media){
+      const m = item.media;
+      row.insertAdjacentHTML("beforeend",
+        ` <span class="tag">${esc(m.path_type || "")}</span> <span class="tree-meta">${esc(m.name || "")} ${esc(m.path_url || "")}</span>`);
+    }
+  } else if(item.type === "library" && item.collection_type){
+    row.insertAdjacentHTML("beforeend", ` <span class="tree-meta">${esc(item.collection_type)}</span>`);
+  }
+
+  wrap.appendChild(row);
+
+  if(expandable){
+    let childBox = null;
+    let expanded = false;
+    twisty.addEventListener("click", async () => {
+      if(expanded){
+        if(childBox){ childBox.remove(); childBox = null; }
+        twisty.textContent = "▶";
+        expanded = false;
+        return;
+      }
+      childBox = document.createElement("div");
+      childBox.className = "tree-children";
+      const pad = ((level + 1) * INDENT + 22) + "px";
+      childBox.innerHTML = `<div class="msg" style="padding-left:${pad}">加载中…</div>`;
+      wrap.appendChild(childBox);
+      twisty.textContent = "▼";
+      expanded = true;
+      const query = item.type === "library" ? "?library_id=" + item.id : "?parent_id=" + item.id;
+      try{
+        const r = await api("/admin/tree/children" + query);
+        const kids = (r && r.items) || [];
+        childBox.innerHTML = "";
+        if(!kids.length){
+          childBox.innerHTML = `<div class="msg" style="padding-left:${pad}">（无子项）</div>`;
+        } else {
+          kids.forEach((k) => childBox.appendChild(renderTreeNode(k, level + 1)));
+        }
+      }catch(e){
+        childBox.innerHTML = `<div class="errbox" style="padding-left:${pad}">加载失败：${esc(e.message)}</div>`;
+      }
+    });
+  }
+  return wrap;
 }
 
 /* ---------- 条目（按刮削状态） ---------- */
@@ -615,7 +699,7 @@ async function stopWatch(){
 let activeTab = "libraries";
 function refreshAll(){
   if(activeTab === "libraries") loadLibs();
-  else if(activeTab === "media") loadMedia();
+  else if(activeTab === "media") loadMediaTree();
   else if(activeTab === "items") loadItems();
   else if(activeTab === "jobs"){ loadScanPaths(); loadScrapeLibs(); watchStatus(); }
   else if(activeTab === "settings") loadSettings();
@@ -671,6 +755,7 @@ $("#btnScrapeRefresh").addEventListener("click", () => $("#scrapeStatus").textCo
 $("#btnProbe").addEventListener("click", () => startProbe(false));
 $("#btnProbeForce").addEventListener("click", () => startProbe(true));
 $("#btnProbeRefresh").addEventListener("click", () => $("#probeStatus").textContent = "-");
+$("#btnMediaRefresh").addEventListener("click", loadMediaTree);
 $("#btnWatchStart").addEventListener("click", startWatch);
 $("#btnWatchStatus").addEventListener("click", watchStatus);
 $("#btnWatchStop").addEventListener("click", stopWatch);

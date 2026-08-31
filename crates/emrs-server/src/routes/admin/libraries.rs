@@ -397,39 +397,211 @@ pub(super) async fn delete_library(State(st): State<AppState>, Path(id): Path<i6
     }
 }
 
-/// GET /admin/media：列出所有媒体（分页）。
-pub(super) async fn list_media(State(st): State<AppState>) -> Response {
-    let rows = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>, i64)>(
-        "SELECT ms.uuid, ms.name, \
-                CASE ms.protocol WHEN 'file' THEN 'local' WHEN 'strm' THEN 'strm' WHEN 'webdavs' THEN 'webdav' ELSE ms.protocol END AS path_type, \
-                COALESCE(ms.path, ms.remote_path) AS path_url, ms.item_id \
-         FROM media_source ms \
-         ORDER BY ms.created_at DESC LIMIT 200",
-    )
-    .fetch_all(st.db.pool())
-    .await;
+#[derive(Deserialize, Default)]
+pub(super) struct TreeChildrenQuery {
+    /// 展开某媒体库顶层（movie/series）。与 `parent_id` 二选一。
+    library_id: Option<i64>,
+    /// 展开某条目下一层（series→season / season→episode）。与 `library_id` 二选一。
+    parent_id: Option<i64>,
+}
 
-    match rows {
-        Ok(list) => {
+/// 把一个树节点拼成统一 JSON。`media` 仅 episode 叶子有值（首源路径）。
+/// `has_children` 由类型派生：series（有季）/ season（有集）可展开，movie/episode 为叶子。
+fn tree_node(
+    id: i64,
+    title: String,
+    item_type: &str,
+    season_number: Option<i64>,
+    episode_number: Option<i64>,
+    is_virtual: bool,
+    media: Option<Value>,
+) -> Value {
+    let has_children = matches!(item_type, "series" | "season");
+    json!({
+        "id": id,
+        "title": title,
+        "type": item_type,
+        "has_children": has_children,
+        "season_number": season_number,
+        "episode_number": episode_number,
+        "is_virtual": is_virtual,
+        "media": media,
+    })
+}
+
+/// GET /admin/tree/children?library_id=N | ?parent_id=M：后台媒体树单层懒加载。
+///
+/// - `library_id` → 该库顶层条目（movie/series），series 可展开（`has_children`）。
+/// - `parent_id` → 按父类型下钻：series→season 列表；season→episode 列表（批取首源路径）；
+///   movie/episode/不存在 → 空。
+///
+/// 方言安全：`?` 占位符、不用 `||` 拼接、`is_virtual` 按 i64 读再转 bool。
+pub(super) async fn list_tree_children(
+    State(st): State<AppState>,
+    Query(q): Query<TreeChildrenQuery>,
+) -> Response {
+    let pool = st.db.pool();
+
+    // 分支 1：库顶层 movie/series。
+    if let Some(lib) = q.library_id {
+        let rows = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT id, title, type FROM item \
+             WHERE library_id = ? AND type IN ('movie','series') ORDER BY title",
+        )
+        .bind(lib)
+        .fetch_all(pool)
+        .await;
+        return match rows {
+            Ok(list) => {
+                let items: Vec<Value> = list
+                    .into_iter()
+                    .map(|(id, title, ty)| tree_node(id, title, &ty, None, None, false, None))
+                    .collect();
+                axum::Json(json!({ "items": items })).into_response()
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "list_tree_children(library) failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        };
+    }
+
+    // 分支 2：按父条目下钻。
+    let Some(parent) = q.parent_id else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "library_id 或 parent_id 必须提供其一",
+        )
+            .into_response();
+    };
+    let parent_type = sqlx::query_scalar::<_, String>("SELECT type FROM item WHERE id = ? LIMIT 1")
+        .bind(parent)
+        .fetch_optional(pool)
+        .await;
+    let parent_type = match parent_type {
+        Ok(Some(t)) => t,
+        Ok(None) => return axum::Json(json!({ "items": [] })).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list_tree_children: query parent type failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    match parent_type.as_str() {
+        "series" => {
+            let rows = sqlx::query_as::<_, (i64, String, Option<i64>, i64)>(
+                "SELECT id, title, season_number, is_virtual FROM item \
+                 WHERE parent_id = ? AND type = 'season' ORDER BY season_number, id",
+            )
+            .bind(parent)
+            .fetch_all(pool)
+            .await;
+            match rows {
+                Ok(list) => {
+                    let items: Vec<Value> = list
+                        .into_iter()
+                        .map(|(id, title, season_number, is_virtual)| {
+                            tree_node(
+                                id,
+                                title,
+                                "season",
+                                season_number,
+                                None,
+                                is_virtual == 1,
+                                None,
+                            )
+                        })
+                        .collect();
+                    axum::Json(json!({ "items": items })).into_response()
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "list_tree_children(seasons) failed");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
+        }
+        "season" => {
+            let rows = sqlx::query_as::<_, (i64, String, Option<i64>, i64)>(
+                "SELECT id, title, episode_number, is_virtual FROM item \
+                 WHERE parent_id = ? AND type = 'episode' ORDER BY episode_number, id",
+            )
+            .bind(parent)
+            .fetch_all(pool)
+            .await;
+            let list = match rows {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::error!(error = %e, "list_tree_children(episodes) failed");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
+            // 单表 IN 批取各集首源（id 最小）路径，避免 N+1。
+            let ep_ids: Vec<i64> = list.iter().map(|(id, _, _, _)| *id).collect();
+            let media_map = match fetch_episode_media(pool, &ep_ids).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(error = %e, "list_tree_children(episode media) failed");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
             let items: Vec<Value> = list
                 .into_iter()
-                .map(|(uuid, name, path_type, path_url, item_id)| {
-                    json!({
-                        "uuid": uuid,
-                        "name": name,
-                        "path_type": path_type,
-                        "path_url": path_url,
-                        "item_id": item_id,
-                    })
+                .map(|(id, title, episode_number, is_virtual)| {
+                    let media = media_map.get(&id).map(|(name, path_type, path_url)| {
+                        json!({ "name": name, "path_type": path_type, "path_url": path_url })
+                    });
+                    tree_node(
+                        id,
+                        title,
+                        "episode",
+                        None,
+                        episode_number,
+                        is_virtual == 1,
+                        media,
+                    )
                 })
                 .collect();
             axum::Json(json!({ "items": items })).into_response()
         }
-        Err(e) => {
-            tracing::error!(error = %e, "list_media failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        // movie / episode 无 item 子级。
+        _ => axum::Json(json!({ "items": [] })).into_response(),
     }
+}
+
+/// 批取一批 episode 的首个 `media_source`（同 item 下 id 最小者）的展示字段。
+/// 返回 `item_id → (name, path_type, path_url)`。`path_type` 复刻协议归一
+/// （file→local / strm→strm / webdavs→webdav）；`path_url` = `COALESCE(path, remote_path)`。
+async fn fetch_episode_media(
+    pool: &sqlx::AnyPool,
+    item_ids: &[i64],
+) -> Result<
+    std::collections::HashMap<i64, (Option<String>, Option<String>, Option<String>)>,
+    sqlx::Error,
+> {
+    let mut out = std::collections::HashMap::new();
+    if item_ids.is_empty() {
+        return Ok(out);
+    }
+    let placeholders = std::iter::repeat_n("?", item_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT item_id, name, \
+                CASE protocol WHEN 'file' THEN 'local' WHEN 'strm' THEN 'strm' \
+                              WHEN 'webdavs' THEN 'webdav' ELSE protocol END AS path_type, \
+                COALESCE(path, remote_path) AS path_url \
+         FROM media_source WHERE item_id IN ({placeholders}) ORDER BY item_id, id"
+    );
+    let mut q = sqlx::query_as::<_, (i64, Option<String>, Option<String>, Option<String>)>(&sql);
+    for id in item_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    for (item_id, name, path_type, path_url) in rows {
+        // 已按 item_id, id 升序，保留首源（id 最小）。
+        out.entry(item_id).or_insert((name, path_type, path_url));
+    }
+    Ok(out)
 }
 
 #[derive(Deserialize, Default)]

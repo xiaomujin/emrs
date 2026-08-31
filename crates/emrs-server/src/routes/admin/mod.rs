@@ -38,8 +38,8 @@ pub fn admin_routes() -> Router<AppState> {
             "/admin/libraries/{id}",
             get(get_library).put(update_library).delete(delete_library),
         )
-        // 媒体管理
-        .route("/admin/media", get(list_media))
+        // 媒体树（库→剧→季→集，单层懒加载）
+        .route("/admin/tree/children", get(list_tree_children))
         // 扫描 job（异步化 + 轮询）
         .route("/admin/library/scan/start", post(start_scan))
         .route(
