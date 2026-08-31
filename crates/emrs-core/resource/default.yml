@@ -1,0 +1,68 @@
+# EMRS 默认配置 — 首次启动时自动生成，修改后重启生效。
+# 密钥类字段（playback.signing_key、tmdb.api_key）
+# 一律从本配置文件读取，不读取环境变量。
+
+server:
+  # 监听端口
+  port: 8086
+
+storage:
+  # 数据库 DSN（sqlite/mysql/postgres）
+  dsn: "sqlite://data/emrs.db?mode=rwc"
+  max_connections: 8
+
+cache:
+  # 缓存后端：memory | redis | valkey
+  backend: "memory"
+  # redis/valkey 时必填，memory 时忽略
+  # url: "redis://127.0.0.1:6379"
+  default_ttl_secs: 3600
+
+emby:
+  server_id: "EMRS"
+  server_name: "EMRS"
+  api_key: "EMRS_KEY"
+
+playback:
+  # 播放票据签名密钥（必填，否则无法签发播放票据 /s/{ticket}）。从本文件读取。
+  signing_key: ""
+  ticket_ttl_secs: 3600
+  redirect_cache_ttl_secs: 10800
+
+cloud:
+  # 启用的 driver 列表（当前仅 http 直链 302）
+  drivers:
+    - "http"
+
+tmdb:
+  # TMDB v3 API key 或 v4 Bearer token（以 eyJ 开头自动识别）。为空则刮削静默跳过。
+  # 从本文件读取。请求限速由 pipeline.scrape_rate_limit_per_sec 控制。
+  api_key: ""
+
+http:
+  # 外部请求代理地址（TMDB API、剧照下载均走此代理）。为空则直连。
+  # 如 http://127.0.0.1:7890
+  proxy_url: ""
+
+# 四阶段流水线（Scan → Probe → Scrape 后台轮询）：
+#   Scan 落物理事实 → Probe 消费 media_source(status='pending') 回填流信息
+#   → Scrape 消费 item(scrape_status='pending') 匹配 TMDB 回填元数据
+pipeline:
+  # 是否启动后台流水线轮询
+  enabled: true
+  # probe 并发度（同时在飞的 ffprobe 进程数上限）
+  probe_concurrency: 2
+  # scrape 单批消费条数
+  scrape_concurrency: 4
+  # 各阶段 DB 轮询间隔（秒）
+  poll_interval_secs: 10
+  # 刮削失败最大尝试次数，超过转 failed 终态；网络/API 异常按 attempts 重试
+  scrape_retry_max_attempts: 5
+  # TMDB 全局限速（次/秒，进程级共享；0 不限速）
+  scrape_rate_limit_per_sec: 3
+  # 删除检测兜底间隔（秒）；每次扫描完成后必触发一次
+  delete_check_interval_secs: 3600
+
+# 媒体库导入通过后台管理接口配置，无需在配置文件中设置：
+#   POST /admin/libraries          创建库（配置路径）
+#   POST /admin/library/scan/start 触发异步扫描

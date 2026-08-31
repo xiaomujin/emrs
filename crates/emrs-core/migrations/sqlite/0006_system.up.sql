@@ -1,0 +1,7 @@
+-- 0006_system: app_setting（KV 系统设置）
+
+CREATE TABLE app_setting (
+    key        TEXT PRIMARY KEY,
+    value      TEXT    NOT NULL,
+    updated_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);

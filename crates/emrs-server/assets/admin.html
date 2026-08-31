@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>emrs · 管理后台</title>
+<style>
+  :root{
+    --bg:#101828; --panel:#1d2435; --panel2:#252e44; --line:#303b55;
+    --text:#e6e9ef; --muted:#aab2c5; --accent:#4c8dff; --ok:#2fbf71; --warn:#e8a33d; --err:#ef5350;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text)}
+  a{color:var(--accent)}
+  .wrap{max-width:1100px;margin:0 auto;padding:24px 16px 60px}
+  h1{font-size:22px;margin:0}
+  h2{font-size:16px;margin:0 0 12px}
+  .sub{color:var(--muted);font-size:13px;margin-top:4px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;margin-top:16px}
+  .flex{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  input,select,textarea{
+    background:var(--panel2);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:8px 10px;font-size:14px;outline:none;font-family:inherit;
+  }
+  input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+  input[type=checkbox]{width:16px;height:16px}
+  label{font-size:13px;color:var(--muted)}
+  button{
+    background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 14px;
+    font-size:14px;cursor:pointer;
+  }
+  button:hover{filter:brightness(1.1)}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  button.danger{background:transparent;border:1px solid var(--err);color:var(--err)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;word-break:break-all}
+  th{color:var(--muted);font-weight:600}
+  tr:hover td{background:#202945}
+  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;border:1px solid var(--line)}
+  .tag.run{color:var(--ok);border-color:var(--ok)}
+  .tag.on{color:var(--ok);border-color:var(--ok)}
+  .tag.off{color:var(--muted)}
+  .tag.fail{color:var(--err);border-color:var(--err)}
+  .mono{font-family:Consolas,Menlo,monospace;font-size:12px;color:var(--muted)}
+  .errbox{color:var(--err);font-size:13px;white-space:pre-wrap}
+  .msg{color:var(--muted);font-size:13px}
+  .hide{display:none!important}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:50}
+  .modal .card{margin:0;width:560px;max-width:92vw;max-height:86vh;overflow:auto}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .full{grid-column:1 / -1}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .tabs{display:flex;gap:6px;margin-top:16px;flex-wrap:wrap}
+  .tab{padding:8px 16px;border-radius:8px;background:var(--panel);border:1px solid var(--line);color:var(--muted);cursor:pointer;font-size:14px}
+  .tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .logout{margin-left:auto}
+  .hint{font-size:12px;color:var(--muted);line-height:1.7}
+  .toast{position:fixed;right:16px;bottom:16px;padding:10px 16px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);font-size:13px;max-width:380px;z-index:99;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="flex">
+    <div>
+      <h1>emrs · 管理后台</h1>
+      <div class="sub">Emby 兼容媒体服务器（Rust）— 库 / 媒体 / 条目 / 扫描监听 / 设置</div>
+    </div>
+    <button class="ghost logout hide" id="btnLogout">退出登录</button>
+  </div>
+
+  <!-- 登录 -->
+  <div class="card" id="loginCard">
+    <h2>管理员登录</h2>
+    <div class="grid2">
+      <div><label>用户名</label><br><input id="inUsername" style="width:100%" autocomplete="username"></div>
+      <div><label>密码</label><br><input id="inPassword" type="password" style="width:100%" autocomplete="current-password"></div>
+    </div>
+    <p class="hint">账号存于 user 表（role=admin），密码哈希校验。登录后签发 admin_session token，用于后续管理接口。</p>
+    <div class="flex"><button id="btnLogin">登录</button><span class="msg" id="loginMsg"></span></div>
+  </div>
+
+  <!-- 主面板 -->
+  <div id="panel" class="hide">
+    <div class="tabs">
+      <div class="tab active" data-tab="libraries">库管理</div>
+      <div class="tab" data-tab="media">媒体</div>
+      <div class="tab" data-tab="items">条目</div>
+      <div class="tab" data-tab="jobs">扫描 / 监听</div>
+      <div class="tab" data-tab="settings">设置</div>
+    </div>
+
+    <!-- 库管理 -->
+    <div class="card tabpane" id="tab-libraries">
+      <div class="flex" style="justify-content:space-between">
+        <h2>媒体库</h2>
+        <button id="btnNewLib">+ 新建库</button>
+      </div>
+      <p class="errbox" id="errLibs"></p>
+      <div style="overflow:auto"><table>
+        <thead><tr><th>ID</th><th>名称</th><th>类型</th><th>路径</th><th>创建时间</th><th style="width:120px">操作</th></tr></thead>
+        <tbody id="tbodyLibs"></tbody>
+      </table></div>
+    </div>
+
+    <!-- 媒体 -->
+    <div class="card tabpane hide" id="tab-media">
+      <h2>媒体列表（最近 200 条）</h2>
+      <p class="errbox" id="errMedia"></p>
+      <div style="overflow:auto"><table>
+        <thead><tr><th>UUID</th><th>名称</th><th>类型</th><th>路径 / 直链</th><th>库 ID</th></tr></thead>
+        <tbody id="tbodyMedia"></tbody>
+      </table></div>
+    </div>
+
+    <!-- 条目（按刮削状态） -->
+    <div class="card tabpane hide" id="tab-items">
+      <div class="flex" style="justify-content:space-between">
+        <h2>条目（按刮削状态）</h2>
+        <div class="flex">
+          <select id="inItemStatus" style="min-width:180px">
+            <option value="none">none — 无匹配</option>
+            <option value="failed">failed — 失败</option>
+            <option value="pending">pending — 待刮</option>
+            <option value="scraping">scraping — 刮削中</option>
+            <option value="scraped">scraped — 已刮削</option>
+          </select>
+          <button class="ghost" id="btnItemRefresh">刷新</button>
+        </div>
+      </div>
+      <p class="msg">无匹配 / 失败的条目可点「识别」手动指定 TMDB ID 重新刮削（按 ID 快路径，仅 movie/series）。</p>
+      <p class="errbox" id="errItems"></p>
+      <div style="overflow:auto"><table>
+        <thead><tr><th>ID</th><th>标题</th><th>类型</th><th>状态</th><th>TMDB ID</th><th style="width:90px">操作</th></tr></thead>
+        <tbody id="tbodyItems"></tbody>
+      </table></div>
+    </div>
+
+    <!-- 扫描 / 监听 -->
+    <div class="card tabpane hide" id="tab-jobs">
+      <h2>扫描</h2>
+      <div class="flex">
+        <input id="inScanPath" placeholder="指定路径（留空 = 扫描全部库根）" style="width:320px">
+        <button id="btnScan">开始扫描</button>
+      </div>
+      <p class="msg">扫描为异步 job，完成后可轮询结果。重复路径已由服务端去重，不会翻倍。</p>
+      <h2 style="margin-top:18px">扫描进度</h2>
+      <div class="flex"><span class="msg" id="scanStatus">-</span><button class="ghost" id="btnScanRefresh">刷新</button><button class="danger hide" id="btnScanCancel">取消扫描</button></div>
+      <hr style="border:none;border-top:1px solid var(--line);margin:18px 0">
+      <h2>元数据刮削</h2>
+      <div class="flex">
+        <select id="inScrapeLib" style="min-width:200px"></select>
+        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="inScrapeForce"> 强制重刮（忽略已有 tmdb_id）</label>
+        <button id="btnScrape">开始刮削</button>
+      </div>
+      <p class="msg">按 TMDB 补刮/重刮元数据（原名 / 简介 / 日期 / 海报），异步 job。需在 emrs.yml 配置 tmdb.api_key，未配置时全部跳过。</p>
+      <h2 style="margin-top:18px">刮削进度</h2>
+      <div class="flex"><span class="msg" id="scrapeStatus">-</span><button class="ghost" id="btnScrapeRefresh">刷新</button></div>
+      <hr style="border:none;border-top:1px solid var(--line);margin:18px 0">
+      <h2>流信息回填</h2>
+      <div class="flex">
+        <button id="btnProbe">开始回填</button>
+        <button id="btnProbeForce">强制回填</button>
+      </div>
+      <p class="msg">对缺失流信息（ffprobe 分辨率/编码/帧率/码率等）的本地视频执行探测并回填；强制回填会重探全部本地视频（覆盖旧数据）。服务器启动时会自动下载 ffprobe，下载完成后可执行本操作。</p>
+      <h2 style="margin-top:18px">回填进度</h2>
+      <div class="flex"><span class="msg" id="probeStatus">-</span><button class="ghost" id="btnProbeRefresh">刷新</button></div>
+      <hr style="border:none;border-top:1px solid var(--line);margin:18px 0">
+      <h2>目录监听</h2>
+      <div class="flex">
+        <input id="inWatchRoots" placeholder="监听根，逗号分隔（留空 = 全部库根）" style="width:320px">
+        <button id="btnWatchStart">启动监听</button>
+        <button class="ghost" id="btnWatchStatus">状态</button>
+        <button class="danger" id="btnWatchStop">停止</button>
+      </div>
+      <p class="msg" id="watchStatus">-</p>
+    </div>
+
+    <!-- 设置 -->
+    <div class="card tabpane hide" id="tab-settings">
+      <div class="flex" style="justify-content:space-between">
+        <h2>系统设置</h2>
+        <div class="flex">
+          <button class="ghost" id="btnSetAdd">+ 新增</button>
+          <button id="btnSetSave">保存全部</button>
+        </div>
+      </div>
+      <p class="msg">app_setting 表的键值对，保存时 UPSERT 写入。</p>
+      <p class="errbox" id="errSettings"></p>
+      <div style="overflow:auto"><table>
+        <thead><tr><th style="width:40%">键</th><th>值</th><th style="width:70px">操作</th></tr></thead>
+        <tbody id="tbodySettings"></tbody>
+      </table></div>
+    </div>
+  </div>
+</div>
+
+<!-- 库编辑弹窗 -->
+<div class="modal hide" id="modalLib">
+  <div class="card">
+    <h2 id="libModalTitle">新建库</h2>
+    <input type="hidden" id="libId">
+    <div class="grid2">
+      <div><label>名称</label><br><input id="libName" style="width:100%"></div>
+      <div><label>路径</label><br><input id="libPath" style="width:100%" placeholder="如 D:\media 或 /mnt/media"></div>
+    </div>
+    <div style="margin-top:12px"><label>类型</label><br>
+      <!-- 与 emrs-core::stores::COLLECTION_TYPES 保持一致（改后端列表须同步此处） -->
+      <select id="libType" style="width:100%">
+        <option value="tvshows" selected>tvshows — 电视节目</option>
+        <option value="movies">movies — 电影</option>
+        <option value="music">music — 音乐</option>
+        <option value="musicvideos">musicvideos — 音乐视频</option>
+        <option value="homevideos">homevideos — 家庭视频/照片</option>
+        <option value="games">games — 游戏</option>
+        <option value="books">books — 书籍</option>
+        <option value="livetv">livetv — 直播电视</option>
+        <option value="channels">channels — 频道</option>
+        <option value="boxsets">boxsets — 合集/系列</option>
+        <option value="mixed">mixed — 混合</option>
+        <option value="audiobooks">audiobooks — 有声读物</option>
+        <option value="playlists">playlists — 播放列表</option>
+      </select>
+    </div>
+    <div class="flex" style="margin-top:14px">
+      <button id="btnLibSave">保存</button>
+      <button class="ghost" data-close>取消</button>
+    </div>
+    <p class="errbox" id="errLibForm"></p>
+  </div>
+</div>
+
+<!-- 手动识别弹窗 -->
+<div class="modal hide" id="modalIdentify">
+  <div class="card">
+    <h2 id="idModalTitle">识别条目</h2>
+    <input type="hidden" id="idItemId">
+    <p class="hint">为该条目指定 TMDB ID，保存后置为 pending 并立即唤醒刮削按 ID 快路径重刮。仅 movie/series 可识别；季/集随父级派生。</p>
+    <div class="grid2">
+      <div class="full"><label>标题</label><br><input id="idItemTitle" readonly style="width:100%"></div>
+      <div class="full"><label>TMDB ID</label><br><input id="idTmdb" style="width:100%" placeholder="如 12345"></div>
+    </div>
+    <div class="flex" style="margin-top:10px"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="idClear" checked> 清除旧元数据（genre / 人物 / 图片 / 简介等，重新匹配通常意味着旧数据有误）</label></div>
+    <div class="flex" style="margin-top:14px">
+      <button id="btnIdSave">保存并重刮</button>
+      <button class="ghost" data-close>取消</button>
+    </div>
+    <p class="errbox" id="errIdentify"></p>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const base = ""; // 相对路径：走无前缀版 API
+
+/* ---------- 基础请求 ---------- */
+function token(){ return localStorage.getItem("emrs_admin_token") || ""; }
+async function api(path, opts={}){
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers || {});
+  if(token()) opts.headers["Authorization"] = "Bearer " + token();
+  if(opts.body) opts.headers["Content-Type"] = "application/json";
+  const res = await fetch(base + path, opts);
+  if(res.status === 401){ showToast("登录失效，请重新登录"); showLogin(); throw new Error("未授权"); }
+  const text = await res.text();
+  let data = null;
+  if(text){ try{ data = JSON.parse(text); }catch(e){ data = text; } }
+  if(!res.ok){ throw new Error((data && (data.Message || data.message)) || ("HTTP " + res.status + (data ? ": " + text : ""))); }
+  return data;
+}
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+/* ---------- 状态切换 ---------- */
+function showLogin(){
+  localStorage.removeItem("emrs_admin_token");
+  $("#loginCard").classList.remove("hide");
+  $("#panel").classList.add("hide");
+  $("#btnLogout").classList.add("hide");
+}
+function showPanel(){
+  $("#loginCard").classList.add("hide");
+  $("#panel").classList.remove("hide");
+  $("#btnLogout").classList.remove("hide");
+}
+
+/* ---------- 登录 ---------- */
+async function doLogin(){
+  const username = $("#inUsername").value.trim();
+  const password = $("#inPassword").value;
+  if(!username || !password){ $("#loginMsg").textContent = "请输入用户名和密码"; return; }
+  $("#btnLogin").disabled = true;
+  try{
+    const r = await api("/admin/login", { method:"POST", body: JSON.stringify({username, password}) });
+    localStorage.setItem("emrs_admin_token", r.token);
+    $("#loginMsg").textContent = "";
+    $("#inPassword").value = "";
+    showPanel();
+    switchTab((location.hash || "").replace(/^#/, "")); // 登录后按 URL hash 直达页签
+  }catch(e){
+    $("#loginMsg").textContent = "登录失败：" + e.message;
+  }finally{
+    $("#btnLogin").disabled = false;
+  }
+}
+
+/* ---------- 库管理 ---------- */
+async function loadLibs(){
+  const box = $("#errLibs"); box.textContent = "";
+  try{
+    const r = await api("/admin/libraries");
+    const items = (r && r.items) || [];
+    $("#tbodyLibs").innerHTML = items.length ? items.map((l) => `
+      <tr>
+        <td>${l.id}</td><td>${esc(l.name)}</td><td>${esc(l.collection_type || 'tvshows')}</td>
+        <td class="mono">${esc(l.path)}</td><td class="mono">${esc(l.created_at)}</td>
+        <td>
+          <button class="ghost" onclick="editLib(${l.id})">编辑</button>
+          <button class="danger" onclick="delLib(${l.id})">删除</button>
+        </td>
+      </tr>`).join("") : `<tr><td colspan="6" style="color:var(--muted)">暂无媒体库，点击右上角新建。</td></tr>`;
+  }catch(e){ box.textContent = "加载失败：" + e.message; }
+}
+function openLibModal(lib){
+  $("#libId").value = lib ? lib.id : "";
+  $("#libName").value = lib ? lib.name : "";
+  $("#libPath").value = (lib && lib.path) || "";
+    // 回填 collection_type：若后端返回了未知值（手动改库/版本不匹配），退化为 "tvshows"
+  const ct = (lib && lib.collection_type) || "tvshows";
+  $("#libType").value = Array.from($("#libType").options).some(o => o.value === ct) ? ct : "tvshows";
+  $("#libModalTitle").textContent = lib ? "编辑库 #" + lib.id : "新建库";
+  $("#errLibForm").textContent = "";
+  $("#modalLib").classList.remove("hide");
+}
+function editLib(id){
+  api("/admin/libraries/" + id).then((l) => openLibModal(l)).catch((e) => alert(e.message));
+}
+async function delLib(id){
+  if(!confirm("确定删除媒体库 #" + id + "？（将物理删除库及全部媒体数据）")) return;
+  try{ await api("/admin/libraries/" + id, { method:"DELETE" }); loadLibs(); showToast("已删除"); }
+  catch(e){ alert(e.message); }
+}
+async function saveLib(){
+  const name = $("#libName").value.trim(), path = $("#libPath").value.trim();
+  if(!name || !path){ $("#errLibForm").textContent = "名称和路径不能为空"; return; }
+  const id = $("#libId").value;
+  const body = JSON.stringify({ name, path, collection_type: $("#libType").value });
+  try{
+    await api(id ? "/admin/libraries/" + id : "/admin/libraries", { method: id ? "PUT" : "POST", body });
+    $("#modalLib").classList.add("hide");
+    loadLibs(); showToast(id ? "已更新" : "已创建");
+  }catch(e){ $("#errLibForm").textContent = e.message; }
+}
+
+/* ---------- 媒体 ---------- */
+async function loadMedia(){
+  const box = $("#errMedia"); box.textContent = "";
+  try{
+    const r = await api("/admin/media");
+    const items = (r && r.items) || [];
+    $("#tbodyMedia").innerHTML = items.length ? items.map((m) => `
+      <tr>
+        <td class="mono">${esc(m.uuid)}</td>
+        <td>${esc(m.name)}</td>
+        <td><span class="tag">${esc(m.path_type)}</span></td>
+        <td class="mono">${esc(m.path_url)}</td>
+        <td>${m.item_id || "-"}</td>
+      </tr>`).join("") : `<tr><td colspan="5" style="color:var(--muted)">暂无媒体，先导入 STRM 或创建库并扫描。</td></tr>`;
+  }catch(e){ box.textContent = "加载失败：" + e.message; }
+}
+
+/* ---------- 条目（按刮削状态） ---------- */
+function statusTagClass(s){ return s === "scraped" ? "on" : s === "failed" ? "fail" : "off"; }
+async function loadItems(){
+  const box = $("#errItems"); box.textContent = "";
+  try{
+    const status = $("#inItemStatus").value;
+    const r = await api("/admin/library/items?scrape_status=" + encodeURIComponent(status));
+    const items = (r && r.items) || [];
+    $("#tbodyItems").innerHTML = items.length ? items.map((it) => `
+      <tr>
+        <td>${it.id}</td>
+        <td>${esc(it.title)}</td>
+        <td><span class="tag">${esc(it.type)}</span></td>
+        <td><span class="tag ${statusTagClass(it.scrape_status)}">${esc(it.scrape_status)}</span></td>
+        <td class="mono">${it.tmdb_id ? esc(it.tmdb_id) : "-"}</td>
+        <td><button class="ghost" data-identify="${it.id}" data-title="${esc(it.title)}" data-tmdb="${esc(it.tmdb_id || "")}">识别</button></td>
+      </tr>`).join("") : `<tr><td colspan="6" style="color:var(--muted)">该状态下无条目。</td></tr>`;
+  }catch(e){ box.textContent = "加载失败：" + e.message; }
+}
+function openIdentify(id, title, tmdb){
+  $("#idItemId").value = id;
+  $("#idModalTitle").textContent = "识别条目 #" + id;
+  $("#idItemTitle").value = title || "";
+  $("#idTmdb").value = tmdb || "";
+  $("#idClear").checked = true;
+  $("#errIdentify").textContent = "";
+  $("#modalIdentify").classList.remove("hide");
+}
+async function identifyItem(){
+  const id = $("#idItemId").value;
+  const tmdb = $("#idTmdb").value.trim();
+  if(!tmdb){ $("#errIdentify").textContent = "TMDB ID 不能为空"; return; }
+  const body = JSON.stringify({ tmdb_id: tmdb, clear_metadata: $("#idClear").checked });
+  try{
+    await api("/admin/library/items/" + id + "/identify", { method:"POST", body });
+    $("#modalIdentify").classList.add("hide");
+    showToast("已置为 pending 并唤醒刮削");
+    loadItems();
+  }catch(e){ $("#errIdentify").textContent = e.message; }
+}
+
+/* ---------- 设置 ---------- */
+function settingRow(k, v){
+  return `<tr>
+    <td><input class="set-key" style="width:100%" value="${esc(k)}" ${k ? "readonly" : ""}></td>
+    <td><input class="set-val" style="width:100%" value="${esc(v)}"></td>
+    <td><button class="danger" onclick="this.closest('tr').remove()">删除</button></td>
+  </tr>`;
+}
+async function loadSettings(){
+  const box = $("#errSettings"); box.textContent = "";
+  try{
+    const r = await api("/admin/settings");
+    const obj = (r && r.settings) || {};
+    const entries = Object.entries(obj);
+    $("#tbodySettings").innerHTML = entries.length ? entries.map(([k,v]) => settingRow(k, v)).join("")
+      : `<tr class="empty-row"><td colspan="3" style="color:var(--muted)">暂无设置，点右上角新增。</td></tr>`;
+  }catch(e){ box.textContent = "加载失败：" + e.message; }
+}
+function addSettingRow(){
+  const tb = $("#tbodySettings");
+  const empty = tb.querySelector(".empty-row"); if(empty) empty.remove();
+  tb.insertAdjacentHTML("beforeend", settingRow("", ""));
+}
+async function saveSettings(){
+  const body = {};
+  let dup = false;
+  $("#tbodySettings").querySelectorAll("tr").forEach((tr) => {
+    const kInput = tr.querySelector(".set-key");
+    if(!kInput) return;
+    const k = kInput.value.trim();
+    const v = tr.querySelector(".set-val").value;
+    if(k){
+      if(Object.prototype.hasOwnProperty.call(body, k)){ dup = k; }
+      body[k] = v;
+    }
+  });
+  if(dup){ $("#errSettings").textContent = "存在重复键：" + dup; return; }
+  try{
+    const r = await api("/admin/settings", { method:"PUT", body: JSON.stringify(body) });
+    showToast("已保存 " + (r && typeof r.updated === "number" ? r.updated : Object.keys(body).length) + " 项");
+    loadSettings();
+  }catch(e){ $("#errSettings").textContent = "保存失败：" + e.message; }
+}
+
+/* ---------- 扫描 ---------- */
+let pollTimer = null;
+let activeScanJob = null;
+async function startScan(){
+  const path = $("#inScanPath").value.trim();
+  const body = path ? JSON.stringify({ path }) : undefined;
+  try{
+    const r = await api("/admin/library/scan/start", { method:"POST", body, headers: body ? {} : { "Content-Type":"application/json" } });
+    showToast("扫描已启动，job: " + r.job_id);
+    $("#scanStatus").textContent = "扫描中（job " + r.job_id + "）…";
+    activeScanJob = r.job_id;
+    $("#btnScanCancel").classList.remove("hide");
+    pollJob(r.job_id, "/admin/library/scan/", $("#scanStatus"), () => {
+      activeScanJob = null;
+      $("#btnScanCancel").classList.add("hide");
+    });
+  }catch(e){ showToast("启动失败：" + e.message); }
+}
+async function cancelScan(){
+  if(!activeScanJob){ return; }
+  const id = activeScanJob;
+  try{
+    await api("/admin/library/scan/" + id, { method:"DELETE" });
+    $("#btnScanCancel").classList.add("hide");
+    showToast("已请求取消，等待扫描循环退出…");
+  }catch(e){ showToast("取消失败：" + e.message); }
+}
+async function pollJob(jobId, prefix, statusEl, onDone){
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try{
+      const r = await api(prefix + jobId);
+      statusEl.textContent = "job " + jobId + " 状态：" + r.status + " ｜ " + (r.progress || "");
+      if(r.summary) statusEl.textContent += " ｜ 结果：" + JSON.stringify(r.summary);
+      if(r.error) statusEl.textContent += " ｜ 错误：" + r.error;
+      if(r.status !== "running"){ clearInterval(pollTimer); if(onDone) onDone(); }
+    }catch(e){
+      statusEl.textContent = "查询失败：" + e.message;
+      clearInterval(pollTimer); if(onDone) onDone();
+    }
+  }, 1500);
+}
+function stopPoll(){ clearInterval(pollTimer); }
+
+/* ---------- 元数据刮削 ---------- */
+async function loadScrapeLibs(){
+  try{
+    const r = await api("/admin/libraries");
+    const items = (r && r.items) || [];
+    $("#inScrapeLib").innerHTML = '<option value="">全部库</option>' +
+      items.map((l) => `<option value="${l.id}">${esc(l.name)} (#${l.id})</option>`).join("");
+  }catch(e){ /* 库列表加载失败不阻塞 */ }
+}
+async function startScrape(){
+  const libVal = $("#inScrapeLib").value;
+  const body = JSON.stringify({
+    library_id: libVal ? parseInt(libVal, 10) : undefined,
+    force: $("#inScrapeForce").checked,
+  });
+  try{
+    const r = await api("/admin/library/scrape/start", { method:"POST", body });
+    showToast("刮削已启动，job: " + r.job_id);
+    $("#scrapeStatus").textContent = "刮削中（job " + r.job_id + "）…";
+    pollJob(r.job_id, "/admin/library/scrape/", $("#scrapeStatus"));
+  }catch(e){ showToast("启动失败：" + e.message); }
+}
+
+/* ---------- 流信息回填 ---------- */
+async function startProbe(force){
+  const label = force ? "强制回填" : "开始回填";
+  try{
+    const r = await api("/admin/library/probe/start" + (force ? "?force=1" : ""), { method:"POST" });
+    if(r.job_id == null){
+      showToast("没有需要回填流信息的本地视频");
+      $("#probeStatus").textContent = "没有需要回填流信息的本地视频";
+      return;
+    }
+    showToast(label + "已启动，待处理 " + r.pending + " 个，job: " + r.job_id);
+    $("#probeStatus").textContent = label + "中（job " + r.job_id + "）…";
+    pollJob(r.job_id, "/admin/library/probe/", $("#probeStatus"));
+  }catch(e){ showToast(label + "启动失败：" + e.message); }
+}
+
+/* ---------- 监听 ---------- */
+async function startWatch(){
+  const roots = $("#inWatchRoots").value.split(",").map((s) => s.trim()).filter(Boolean);
+  const body = roots.length ? JSON.stringify({ roots }) : undefined;
+  try{
+    const r = await api("/admin/library/watch/start", { method:"POST", body, headers: body ? {} : { "Content-Type":"application/json" } });
+    showToast("监听启动，watching=" + r.watching + (r.failed ? " failed=" + r.failed : ""));
+    watchStatus();
+  }catch(e){ showToast("启动失败：" + e.message); }
+}
+async function watchStatus(){
+  try{
+    const r = await api("/admin/library/watch");
+    const running = r && r.running;
+    const roots = (r && r.roots) || [];
+    $("#watchStatus").textContent = running
+      ? "运行中 ｜ 监听根：" + (roots.join("、") || "-")
+      : "未运行 ｜ 监听根：" + (roots.join("、") || "-");
+    $("#watchStatus").style.color = running ? "var(--ok)" : "var(--muted)";
+  }catch(e){ $("#watchStatus").textContent = "查询失败：" + e.message; }
+}
+async function stopWatch(){
+  if(!confirm("确认停止目录监听？")) return;
+  try{ await api("/admin/library/watch", { method:"DELETE" }); showToast("已停止"); watchStatus(); }
+  catch(e){ showToast("停止失败：" + e.message); }
+}
+
+/* ---------- 通用 ---------- */
+let activeTab = "libraries";
+function refreshAll(){
+  if(activeTab === "libraries") loadLibs();
+  else if(activeTab === "media") loadMedia();
+  else if(activeTab === "items") loadItems();
+  else if(activeTab === "jobs"){ loadScrapeLibs(); watchStatus(); }
+  else if(activeTab === "settings") loadSettings();
+}
+function showToast(msg){
+  let t = $("#toast"); if(!t){ t = document.createElement("div"); t.id = "toast"; t.className = "toast"; document.body.appendChild(t); }
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(showToast._t); showToast._t = setTimeout(() => { t.style.display = "none"; }, 4000);
+}
+
+/* ---------- 页签切换（支持 URL hash 导航：#libraries / #media / #items / #jobs / #settings） ---------- */
+const TABS = ["libraries", "media", "items", "jobs", "settings"];
+function switchTab(name){
+  if(!TABS.includes(name)) name = "libraries";
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  document.querySelectorAll(".tabpane").forEach((p) => p.classList.add("hide"));
+  const pane = $("#tab-" + name);
+  if(pane) pane.classList.remove("hide");
+  activeTab = name;
+  stopPoll();
+  refreshAll();
+}
+
+/* ---------- 事件绑定 ---------- */
+document.addEventListener("click", (e) => {
+  const tab = e.target.closest(".tab");
+  if(tab){
+    switchTab(tab.dataset.tab);
+    if(location.hash !== "#" + tab.dataset.tab) history.replaceState(null, "", "#" + tab.dataset.tab);
+  }
+  const idBtn = e.target.closest("[data-identify]");
+  if(idBtn){
+    openIdentify(parseInt(idBtn.dataset.identify, 10), idBtn.dataset.title || "", idBtn.dataset.tmdb || "");
+  }
+  if(e.target.closest("[data-close]")){
+    e.target.closest(".modal").classList.add("hide");
+  }
+});
+window.addEventListener("hashchange", () => {
+  switchTab((location.hash || "").replace(/^#/, ""));
+});
+$("#btnLogin").addEventListener("click", doLogin);
+$("#inPassword").addEventListener("keydown", (e) => { if(e.key === "Enter") doLogin(); });
+$("#btnLogout").addEventListener("click", showLogin);
+$("#btnNewLib").addEventListener("click", () => openLibModal(null));
+$("#btnLibSave").addEventListener("click", saveLib);
+$("#btnScan").addEventListener("click", startScan);
+$("#btnScanRefresh").addEventListener("click", () => $("#scanStatus").textContent = "-");
+$("#btnScanCancel").addEventListener("click", cancelScan);
+$("#btnScrape").addEventListener("click", startScrape);
+$("#btnScrapeRefresh").addEventListener("click", () => $("#scrapeStatus").textContent = "-");
+$("#btnProbe").addEventListener("click", () => startProbe(false));
+$("#btnProbeForce").addEventListener("click", () => startProbe(true));
+$("#btnProbeRefresh").addEventListener("click", () => $("#probeStatus").textContent = "-");
+$("#btnWatchStart").addEventListener("click", startWatch);
+$("#btnWatchStatus").addEventListener("click", watchStatus);
+$("#btnWatchStop").addEventListener("click", stopWatch);
+$("#inItemStatus").addEventListener("change", loadItems);
+$("#btnItemRefresh").addEventListener("click", loadItems);
+$("#btnIdSave").addEventListener("click", identifyItem);
+$("#btnSetAdd").addEventListener("click", addSettingRow);
+$("#btnSetSave").addEventListener("click", saveSettings);
+
+/* 启动：有 token 则直接进面板（支持带 hash 直达页签），否则显示登录 */
+if(token()){ showPanel(); switchTab((location.hash || "").replace(/^#/, "")); } else { showLogin(); }
+</script>
+</body>
+</html>

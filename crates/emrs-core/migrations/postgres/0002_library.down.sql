@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS scan_job;
+DROP TABLE IF EXISTS library_path;
+DROP TABLE IF EXISTS library;

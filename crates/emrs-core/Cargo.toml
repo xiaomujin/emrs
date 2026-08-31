@@ -1,0 +1,36 @@
+[package]
+name = "emrs-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["process"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+sqlx.workspace = true
+redis.workspace = true
+moka.workspace = true
+serde_yaml.workspace = true
+rust-embed.workspace = true
+chrono.workspace = true
+bcrypt.workspace = true
+rand.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+reqwest.workspace = true
+jsonwebtoken.workspace = true
+notify.workspace = true
+dashmap.workspace = true
+regex.workspace = true
+quick-xml.workspace = true
+filetime.workspace = true
+ffmpeg-sidecar.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+temp-env = "0.3"

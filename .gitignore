@@ -1,0 +1,13 @@
+/target
+.idea
+/data
+data-m4
+logs
+emrs.yml
+.codex
+.claude
+emby_json
+.mcp.json
+docs
+.cargo
+CLAUDE.md
