@@ -50,7 +50,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -80,7 +80,7 @@ jobs:
           Move-Item "target\${{ matrix.target }}\release\${{ matrix.bin }}" "${{ matrix.artifact }}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bins-${{ matrix.target }}
           path: ${{ matrix.artifact }}
@@ -91,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -113,7 +113,7 @@ jobs:
           ls -lh "$out"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: docker-image
           path: ${{ env.IMAGE_NAME }}-${{ needs.meta.outputs.tag }}-docker.tar.gz
@@ -123,12 +123,18 @@ jobs:
     needs: [meta, binaries, docker]
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v5
         with:
-          pattern: '*'
+          pattern: bins-*
           path: dist
           merge-multiple: true
+
+      - name: Download docker image artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: docker-image
+          path: dist
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
