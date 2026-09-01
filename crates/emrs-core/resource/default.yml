@@ -25,7 +25,7 @@ emby:
 
 playback:
   # 播放票据签名密钥（必填，否则无法签发播放票据 /s/{ticket}）。从本文件读取。
-  signing_key: ""
+  signing_key: "emrs_signing_key"
   ticket_ttl_secs: 3600
   redirect_cache_ttl_secs: 10800
   # strm/http 直链播放期缺流信息时异步 ffprobe 回填（当前请求不阻塞，
@@ -85,7 +85,3 @@ pipeline:
   scan_yield_ms: 50
   # probe 每批之间让出写锁的毫秒（0 关闭）
   probe_yield_ms: 20
-
-# 媒体库导入通过后台管理接口配置，无需在配置文件中设置：
-#   POST /admin/libraries          创建库（配置路径）
-#   POST /admin/library/scan/start 触发异步扫描
