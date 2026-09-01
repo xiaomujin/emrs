@@ -651,7 +651,10 @@ impl Scanner {
         } else {
             (parent, season_dir.to_string(), pn.season)
         };
-        if season_number <= 0 {
+        if season_from_dir < 0 && season_number <= 0 {
+            // 仅扁平结构回退:此时 season_number 取自文件名 pn.season,0 是「未知」哨兵
+            // (无 Option,无法区分真第0季),保守回退第1季。
+            // 季目录结构(S00/Season 0)的 0 是合法 Specials 季,保留,不并入第一季。
             season_number = 1;
         }
         // series 磁盘目录锚（归一化绝对路径）：同一剧跨扫描稳定、新增集文件同目录，

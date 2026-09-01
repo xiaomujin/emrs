@@ -259,3 +259,60 @@ async fn add_episode_file_to_scraped_series_no_duplicate_series() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 第0季（Specials）落库回归：早期 `if season_number <= 0 { season_number = 1 }`
+/// 把合法的第0季与「季号未知」哨兵混为一谈，导致本地 `S00` 目录下的实体文件
+/// 全被并入第一季。修复后季目录结构（season_from_dir>=0）的 0 是合法 Specials 季，
+/// 必须独立建 season_number=0 的季并挂载其下，绝不落到 season_number=1。
+#[tokio::test]
+async fn season_zero_folder_is_not_merged_into_season_one() {
+    use emrs_core::importer::scanner::Scanner;
+
+    let dir = std::env::temp_dir().join(format!("emrs-rescan-{}-s00", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let lib = dir.join("MediaLib");
+    let s1 = lib.join("Demo Show").join("Season 1");
+    let s0 = lib.join("Demo Show").join("S00");
+    std::fs::create_dir_all(&s1).unwrap();
+    std::fs::create_dir_all(&s0).unwrap();
+    std::fs::write(s1.join("Demo Show S01E01.strm"), b"http://x/s01e01.mp4\n").unwrap();
+    std::fs::write(s0.join("Demo Show S00E21.strm"), b"http://x/s00e21.mp4\n").unwrap();
+
+    let db = Arc::new(
+        Db::connect(&emrs_core::config::StorageConfig {
+            dsn: format!(
+                "sqlite:{}?mode=rwc",
+                dir.join("s0.db").to_string_lossy().replace('\\', "/")
+            ),
+            max_connections: 2,
+        })
+        .await
+        .unwrap(),
+    );
+    db.migrate().await.unwrap();
+
+    let scanner = Scanner::new(db.clone(), String::new());
+    scanner.scan_path(&lib).await.unwrap();
+
+    // 两季独立：season_number=0 与 season_number=1 各一条。
+    let season_nums: Vec<i64> = sqlx::query_scalar(
+        "SELECT season_number FROM item WHERE type = 'season' ORDER BY season_number",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(season_nums, vec![0, 1], "S00 必须独立成第0季，不并入第一季");
+
+    // S00E21 落在第0季之下（而非第一季）。
+    let ep_season: Option<i64> = sqlx::query_scalar(
+        "SELECT s.season_number FROM item e \
+         JOIN item s ON s.id = e.parent_id \
+         WHERE e.type = 'episode' AND e.episode_number = 21",
+    )
+    .fetch_optional(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(ep_season, Some(0), "S00E21 应归属第0季，实际 {ep_season:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
