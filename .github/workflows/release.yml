@@ -100,19 +100,25 @@ jobs:
           ver="${raw#v}"                        # 去前缀 v 作语义化标签
           hub="${{ secrets.DOCKERHUB_USERNAME }}"
           # 本地标签（供 docker save 导出 Release 附件）始终存在
-          tags="emrs:${raw}"
+          local="emrs:${raw}"
+          source="$local"
           push="false"
           if [ -n "$hub" ]; then
             push="true"
-            tags="$tags,$hub/${{ env.IMAGE_NAME }}:$ver"
+            # 只向 DockerHub 推限定名，绝不推无命名空间的本地名
+            source="$hub/${{ env.IMAGE_NAME }}:$ver"
+            tags="$source"
             # 仅正式 tag 触发时更新 latest，手动 dev 试跑不动 latest
             if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
               tags="$tags,$hub/${{ env.IMAGE_NAME }}:latest"
             fi
+          else
+            tags="$local"
           fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
           echo "push=$push" >> "$GITHUB_OUTPUT"
-          echo "local=emrs:${raw}" >> "$GITHUB_OUTPUT"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "local=$local" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -138,6 +144,10 @@ jobs:
       - name: Export image to tar.gz
         run: |
           out="${{ env.IMAGE_NAME }}-${{ needs.meta.outputs.tag }}-docker.tar.gz"
+          # 推送模式本地只载入了 DockerHub 限定名，先补回本地名再导出
+          if [ "${{ steps.refs.outputs.push }}" = "true" ]; then
+            docker tag "${{ steps.refs.outputs.source }}" "${{ steps.refs.outputs.local }}"
+          fi
           docker save "${{ steps.refs.outputs.local }}" | gzip > "$out"
           ls -lh "$out"
 
