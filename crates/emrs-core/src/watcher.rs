@@ -225,7 +225,7 @@ mod tests {
                 ..Default::default()
             },
             String::new(),
-            None,
+            crate::http_client::Outbound::none(),
         ));
         pipeline.start();
 

@@ -14,6 +14,7 @@ pub mod cloud;
 pub mod config;
 pub mod db;
 pub mod emby;
+pub mod http_client;
 pub mod importer;
 pub mod job;
 pub mod playback;

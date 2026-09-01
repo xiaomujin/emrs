@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::db::Db;
+use crate::http_client::Outbound;
 
 use crate::importer::scanner::{Scanner, ScrapeOutcome, ScrapeStats};
 
@@ -29,8 +30,8 @@ pub struct ScrapeStage {
 }
 
 impl ScrapeStage {
-    pub fn new(db: Arc<Db>, tmdb_api_key: String, proxy_url: Option<String>) -> Self {
-        Self::with_options(db, tmdb_api_key, proxy_url, 5, 20)
+    pub fn new(db: Arc<Db>, tmdb_api_key: String, outbound: Arc<Outbound>) -> Self {
+        Self::with_options(db, tmdb_api_key, outbound, 5, 20)
     }
 
     /// 完整构造：`retry_max_attempts` 为异常重试上限；
@@ -38,11 +39,11 @@ impl ScrapeStage {
     pub fn with_options(
         db: Arc<Db>,
         tmdb_api_key: String,
-        proxy_url: Option<String>,
+        outbound: Arc<Outbound>,
         retry_max_attempts: u64,
         rate_limit_per_sec: u32,
     ) -> Self {
-        let scanner = Scanner::with_rate(db.clone(), tmdb_api_key, proxy_url, rate_limit_per_sec);
+        let scanner = Scanner::with_rate(db.clone(), tmdb_api_key, outbound, rate_limit_per_sec);
         Self {
             db,
             scanner,

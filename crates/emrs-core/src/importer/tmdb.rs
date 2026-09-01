@@ -4,10 +4,13 @@
 //! 外键查找（IMDb/TVDB）、详情抓取（电影/剧集/季/集）、海报写入。
 
 use std::error::Error;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+
+use crate::http_client::Outbound;
 
 /// TMDB 配置。
 #[derive(Debug, Clone)]
@@ -18,8 +21,8 @@ pub struct TmdbConfig {
     pub base_url: String,
     /// 请求限速（次/秒），0 表示不限速，默认 20 req/s。
     pub requests_per_second: u32,
-    /// 可选 HTTP 代理地址（如 `http://127.0.0.1:7890`）。为空则直连。
-    pub proxy_url: Option<String>,
+    /// 出网配置（代理 + hosts 覆盖），进程启动时构建共享。
+    pub outbound: Arc<Outbound>,
 }
 
 impl Default for TmdbConfig {
@@ -29,7 +32,7 @@ impl Default for TmdbConfig {
             language: "zh-CN".to_string(),
             base_url: "https://api.themoviedb.org/3".to_string(),
             requests_per_second: 20,
-            proxy_url: None,
+            outbound: Arc::new(Outbound::default()),
         }
     }
 }
@@ -409,20 +412,12 @@ impl TmdbScraper {
             reqwest::header::ACCEPT,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
-        let mut builder = reqwest::Client::builder()
+        let builder = reqwest::Client::builder()
             .user_agent("emrs/0.1")
             .default_headers(headers)
             .timeout(Duration::from_secs(15));
-        if let Some(proxy) = config.proxy_url.as_deref().filter(|p| !p.is_empty()) {
-            match reqwest::Proxy::all(proxy) {
-                Ok(p) => {
-                    builder = builder.proxy(p);
-                }
-                Err(e) => {
-                    tracing::warn!(proxy, error = %e, "TMDB 代理解析失败，忽略代理直连");
-                }
-            }
-        }
+        // 代理 + hosts 覆盖统一由 Outbound 套用（见 http_client.rs）。
+        let builder = config.outbound.configure(builder);
         let client = builder.build().unwrap_or_default();
         Self {
             client,

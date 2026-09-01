@@ -21,6 +21,7 @@ use tracing::{info, warn};
 
 use crate::config::PipelineConfig;
 use crate::db::Db;
+use crate::http_client::Outbound;
 
 use super::stages::{ProbeStage, ScanStage, ScrapeStage};
 
@@ -32,7 +33,7 @@ pub struct Pipeline {
     db: Arc<Db>,
     config: PipelineConfig,
     tmdb_api_key: String,
-    proxy_url: Option<String>,
+    outbound: Arc<Outbound>,
     /// scan 阶段唤醒信号
     scan_notify: Arc<Notify>,
     /// probe 阶段唤醒信号
@@ -46,13 +47,13 @@ impl Pipeline {
         db: Arc<Db>,
         config: PipelineConfig,
         tmdb_api_key: String,
-        proxy_url: Option<String>,
+        outbound: Arc<Outbound>,
     ) -> Self {
         Self {
             db,
             config,
             tmdb_api_key,
-            proxy_url,
+            outbound,
             scan_notify: Arc::new(Notify::new()),
             probe_notify: Arc::new(Notify::new()),
             scrape_notify: Arc::new(Notify::new()),
@@ -142,7 +143,7 @@ impl Pipeline {
             let stage = ScanStage::with_tmdb_and_yield(
                 self.db.clone(),
                 self.tmdb_api_key.clone(),
-                self.proxy_url.clone(),
+                self.outbound.clone(),
                 self.config.scan_yield_every_files,
                 self.config.scan_yield_ms,
             );
@@ -244,7 +245,7 @@ impl Pipeline {
             let stage = ScrapeStage::with_options(
                 self.db.clone(),
                 self.tmdb_api_key.clone(),
-                self.proxy_url.clone(),
+                self.outbound.clone(),
                 self.config.scrape_retry_max_attempts,
                 self.config.scrape_rate_limit_per_sec,
             );

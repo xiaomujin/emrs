@@ -2,14 +2,18 @@
 //!
 //! 供 `/Items/{id}/Images` 代理返回图片字节使用；视频播放的直链 302 不走本模块。
 
+use std::sync::Arc;
+
 use anyhow::Result;
+
+use crate::http_client::Outbound;
 
 /// 代理配置。
 pub struct ProxyConfig {
     pub connect_timeout_secs: u64,
     pub max_retries: u32,
-    /// 可选 HTTP 代理地址（如 `http://127.0.0.1:7890`）。为空则不使用代理。
-    pub proxy_url: Option<String>,
+    /// 出网配置（代理 + hosts 覆盖），图片下载走 image.tmdb.org 时同样受益。
+    pub outbound: Arc<Outbound>,
 }
 
 impl Default for ProxyConfig {
@@ -17,7 +21,7 @@ impl Default for ProxyConfig {
         Self {
             connect_timeout_secs: 10,
             max_retries: 2,
-            proxy_url: None,
+            outbound: Arc::new(Outbound::default()),
         }
     }
 }
@@ -30,21 +34,11 @@ pub struct ProxyClient {
 
 impl ProxyClient {
     pub fn new(config: ProxyConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
+        let builder = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(config.connect_timeout_secs))
             .user_agent("emrs/0.1");
-        if let Some(proxy) = &config.proxy_url
-            && !proxy.is_empty()
-        {
-            match reqwest::Proxy::all(proxy) {
-                Ok(p) => {
-                    builder = builder.proxy(p);
-                }
-                Err(e) => {
-                    tracing::warn!(proxy, error = %e, "HTTP 代理解析失败，忽略代理直连");
-                }
-            }
-        }
+        // 代理 + hosts 覆盖统一由 Outbound 套用（见 http_client.rs）。
+        let builder = config.outbound.configure(builder);
         // 启动期单例构建：TLS 后端初始化失败属致命配置错误，直接 panic 而非
         // 静默回退到默认 client（会丢失 connect_timeout / proxy / UA 配置）。
         let client = builder

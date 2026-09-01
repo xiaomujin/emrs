@@ -47,7 +47,18 @@ tmdb:
 http:
   # 外部请求代理地址（TMDB API、剧照下载均走此代理）。为空则直连。
   # 如 http://127.0.0.1:7890
-  proxy_url: ""
+  # proxy_url: ""
+  # —— 自定义 DNS / hosts 覆盖（TMDB 被墙时替代代理的另一条路线）——
+  # 用 hosts 时建议把上面 proxy_url 留空（走代理的请求不应用本地 hosts）。
+  # 来源优先级：内联 hosts_inline > 远程 hosts_url > 本地 hosts_file；三者可并存，启动时加载一次。
+  # 远程 hosts 拉取地址（可配置），成功后缓存到 hosts_file，失败回退 hosts_file。留空=不联网。
+  hosts_url: "https://gh-proxy.com/https://raw.githubusercontent.com/cnwikee/CheckTMDB/refs/heads/main/Tmdb_host_ipv4"
+  # 本地 hosts 文件（远程缓存落点，也可手写离线 hosts）。
+  hosts_file: "data/tmdb_hosts.txt"
+  # 内联 hosts 行（每行 "IP host"，同名覆盖上面来源）。
+  # hosts_inline:
+  #   - "3.170.19.19 api.tmdb.org"
+  #   - "143.244.60.195 image.tmdb.org"
 
 # 四阶段流水线（Scan → Probe → Scrape 后台轮询）：
 #   Scan 落物理事实 → Probe 消费 media_source(status='pending') 回填流信息

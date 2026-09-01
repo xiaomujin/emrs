@@ -64,7 +64,7 @@ async fn test_state() -> AppState {
         db.clone(),
         emrs_core::config::PipelineConfig::default(),
         String::new(),
-        None,
+        emrs_core::http_client::Outbound::none(),
     ));
     pipeline.start();
 

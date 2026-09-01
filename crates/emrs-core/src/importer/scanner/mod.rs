@@ -18,6 +18,7 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::db::Db;
+use crate::http_client::Outbound;
 
 use super::filename;
 use super::nfo;
@@ -87,8 +88,8 @@ pub struct Scanner {
     db: Arc<Db>,
     /// TMDB API key（空字符串表示不刮削）。
     tmdb_api_key: String,
-    /// 可选 HTTP 代理地址（TMDB 刮削用）。为空则直连。
-    tmdb_proxy_url: Option<String>,
+    /// 出网配置（代理 + hosts 覆盖，TMDB 刮削用）。
+    outbound: Arc<Outbound>,
     /// TMDB 进程级限速（次/秒），透传给内部构造的 TmdbConfig。
     /// 默认 20；流水线消费路径用 pipeline.scrape_rate_limit_per_sec 覆盖。
     tmdb_rate_limit_per_sec: u32,
@@ -105,29 +106,29 @@ pub struct Scanner {
 static SCAN_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl Scanner {
-    /// 创建扫描器。
+    /// 创建扫描器（无代理、无 hosts）。
     ///
     /// `tmdb_api_key` 为空时跳过 TMDB 刮削。
     pub fn new(db: Arc<Db>, tmdb_api_key: String) -> Self {
-        Self::with_rate(db, tmdb_api_key, None, 20)
+        Self::with_rate(db, tmdb_api_key, Outbound::none(), 20)
     }
 
-    /// 创建扫描器并指定 TMDB 请求代理。
-    pub fn with_proxy(db: Arc<Db>, tmdb_api_key: String, proxy_url: Option<String>) -> Self {
-        Self::with_rate(db, tmdb_api_key, proxy_url, 20)
+    /// 创建扫描器并指定出网配置（代理 / hosts）。
+    pub fn with_outbound(db: Arc<Db>, tmdb_api_key: String, outbound: Arc<Outbound>) -> Self {
+        Self::with_rate(db, tmdb_api_key, outbound, 20)
     }
 
-    /// 创建扫描器并指定 TMDB 请求代理与进程级限速（次/秒，0 不限速）。
+    /// 创建扫描器并指定出网配置与进程级限速（次/秒，0 不限速）。
     pub fn with_rate(
         db: Arc<Db>,
         tmdb_api_key: String,
-        proxy_url: Option<String>,
+        outbound: Arc<Outbound>,
         rate_limit_per_sec: u32,
     ) -> Self {
         Self {
             db,
             tmdb_api_key,
-            tmdb_proxy_url: proxy_url,
+            outbound,
             tmdb_rate_limit_per_sec: rate_limit_per_sec,
             yield_every_files: 0,
             yield_ms: 0,
@@ -142,11 +143,11 @@ impl Scanner {
         self
     }
 
-    /// 内部构造 TmdbConfig 的统一入口（key / 代理 / 限速三处收敛）。
+    /// 内部构造 TmdbConfig 的统一入口（key / 出网 / 限速三处收敛）。
     pub(super) fn tmdb_config(&self) -> crate::importer::tmdb::TmdbConfig {
         crate::importer::tmdb::TmdbConfig {
             api_key: self.tmdb_api_key.clone(),
-            proxy_url: self.tmdb_proxy_url.clone(),
+            outbound: self.outbound.clone(),
             requests_per_second: self.tmdb_rate_limit_per_sec,
             ..Default::default()
         }

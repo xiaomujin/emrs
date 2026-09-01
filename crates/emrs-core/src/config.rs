@@ -128,7 +128,16 @@ pub struct HttpConfig {
     /// 外部请求代理地址，如 `http://127.0.0.1:7890`。
     /// 设置后 TMDB 刮削和图片代理下载均通过此代理发起。
     /// 为空时不使用代理（直接连接）。
+    /// 注意：与下方 hosts 覆盖互斥生效——走代理的请求不应用本地 hosts。
     pub proxy_url: Option<String>,
+    /// hosts 远程拉取地址（如 gh-proxy 镜像的 CheckTMDB hosts）。
+    /// 非空则启动时拉取一份标准 hosts 文本，解析后覆盖 TMDB/图片域名到指定 IP。
+    /// 拉取成功写回 `hosts_file` 作离线兜底；失败回退读 `hosts_file`。为空则不联网。
+    pub hosts_url: Option<String>,
+    /// 本地 hosts 文件：既是远程拉取的缓存落点，也是纯离线/兜底来源。
+    pub hosts_file: Option<String>,
+    /// 内联 hosts 行（每行 `IP host`），优先级最高——同名 host 覆盖远程/文件。
+    pub hosts_inline: Vec<String>,
 }
 
 /// 四阶段流水线配置。

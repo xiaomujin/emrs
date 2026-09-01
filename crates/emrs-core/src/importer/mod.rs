@@ -21,6 +21,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::db::Db;
+use crate::http_client::Outbound;
 
 pub use scanner::Scanner;
 pub use tmdb::TmdbScraper;
@@ -30,8 +31,8 @@ pub struct Importer {
     db: Arc<Db>,
     /// TMDB API key（空字符串表示不刮削）。
     tmdb_api_key: String,
-    /// 可选 HTTP 代理地址（TMDB 刮削用）。为空则直连。
-    tmdb_proxy_url: Option<String>,
+    /// 出网配置（代理 + hosts 覆盖，TMDB 刮削用）。
+    outbound: Arc<Outbound>,
 }
 
 impl Importer {
@@ -39,7 +40,7 @@ impl Importer {
         Self {
             db,
             tmdb_api_key: String::new(),
-            tmdb_proxy_url: None,
+            outbound: Outbound::none(),
         }
     }
 
@@ -48,25 +49,25 @@ impl Importer {
         Self {
             db,
             tmdb_api_key,
-            tmdb_proxy_url: None,
+            outbound: Outbound::none(),
         }
     }
 
-    /// 启用 TMDB 刮削并指定请求代理的导入器。
-    pub fn with_tmdb_proxy(db: Arc<Db>, tmdb_api_key: String, proxy_url: Option<String>) -> Self {
+    /// 启用 TMDB 刮削并指定出网配置（代理 / hosts）的导入器。
+    pub fn with_tmdb_outbound(db: Arc<Db>, tmdb_api_key: String, outbound: Arc<Outbound>) -> Self {
         Self {
             db,
             tmdb_api_key,
-            tmdb_proxy_url: proxy_url,
+            outbound,
         }
     }
 
     /// 扫描指定路径，导入媒体文件。
     pub async fn scan(&self, path: &Path) -> Result<scanner::ScanStats> {
-        let scanner = Scanner::with_proxy(
+        let scanner = Scanner::with_outbound(
             self.db.clone(),
             self.tmdb_api_key.clone(),
-            self.tmdb_proxy_url.clone(),
+            self.outbound.clone(),
         );
         scanner.scan_path(path).await
     }
@@ -75,7 +76,7 @@ impl Importer {
     pub fn tmdb_scraper(&self, api_key: &str) -> TmdbScraper {
         TmdbScraper::new(tmdb::TmdbConfig {
             api_key: api_key.to_string(),
-            proxy_url: self.tmdb_proxy_url.clone(),
+            outbound: self.outbound.clone(),
             ..Default::default()
         })
     }

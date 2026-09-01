@@ -94,9 +94,12 @@ async fn main() -> Result<()> {
     let drivers = Arc::new(DriverRegistry::new(db.clone(), cfg.clone()));
     tracing::info!("driver 注册表就绪");
 
+    // 统一出网配置：启动时加载一次 hosts（远程/文件/内联合并）+ 代理，供 TMDB 刮削与图片代理共用。
+    let outbound = emrs_core::http_client::Outbound::from_config(&cfg.http).await;
+
     let proxy = Arc::new(emrs_core::playback::proxy::ProxyClient::new(
         emrs_core::playback::proxy::ProxyConfig {
-            proxy_url: cfg.http.proxy_url.clone(),
+            outbound: outbound.clone(),
             ..Default::default()
         },
     ));
@@ -107,7 +110,7 @@ async fn main() -> Result<()> {
         db.clone(),
         cfg.pipeline.clone(),
         cfg.tmdb.api_key.clone(),
-        cfg.http.proxy_url.clone(),
+        outbound,
     ));
     let watcher = Arc::new(emrs_core::watcher::LibraryWatcher::with_pipeline(
         db.clone(),

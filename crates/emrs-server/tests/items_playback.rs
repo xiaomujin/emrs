@@ -82,7 +82,7 @@ async fn test_state() -> AppState {
                 ..Default::default()
             },
             String::new(),
-            None,
+            emrs_core::http_client::Outbound::none(),
         )),
         cache_facade: Arc::new(emrs_core::cache::CacheFacade::new(Arc::new(
             emrs_core::cache::TwoTierCache::new(
