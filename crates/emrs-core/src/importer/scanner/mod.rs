@@ -92,6 +92,12 @@ pub struct Scanner {
     /// TMDB 进程级限速（次/秒），透传给内部构造的 TmdbConfig。
     /// 默认 20；流水线消费路径用 pipeline.scrape_rate_limit_per_sec 覆盖。
     tmdb_rate_limit_per_sec: u32,
+    /// 扫描写库节流：每处理 N 个文件让出一次写锁（0 关闭）。见 `scan_path`。
+    yield_every_files: usize,
+    /// 每让出一次的休眠毫秒。
+    yield_ms: u64,
+    /// 本次 scan 已处理文件计数（scan_path 进入时清零，写锁外无并发）。
+    file_counter: std::sync::atomic::AtomicUsize,
 }
 
 /// 全局扫描互斥：scan job 与 watch 触发的扫描可能并发，
@@ -123,7 +129,17 @@ impl Scanner {
             tmdb_api_key,
             tmdb_proxy_url: proxy_url,
             tmdb_rate_limit_per_sec: rate_limit_per_sec,
+            yield_every_files: 0,
+            yield_ms: 0,
+            file_counter: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// 设置扫描写库节流：每处理 `every` 个文件休眠 `ms` 毫秒让出写锁（0 关闭）。
+    pub fn with_yield(mut self, every: usize, ms: u64) -> Self {
+        self.yield_every_files = every;
+        self.yield_ms = ms;
+        self
     }
 
     /// 内部构造 TmdbConfig 的统一入口（key / 代理 / 限速三处收敛）。
@@ -140,6 +156,9 @@ impl Scanner {
     pub async fn scan_path(&self, path: &Path) -> Result<ScanStats> {
         // 互斥：同一时刻只允许一个扫描（跨 scan job / watch / CLI import）
         let _guard = SCAN_MUTEX.lock().await;
+        // 重置本次扫描的写节流计数（scan_path 持 SCAN_MUTEX，无并发写计数竞争）。
+        self.file_counter
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         let canonical = std::fs::canonicalize(path)
             .with_context(|| format!("无法解析路径: {}", path.display()))?;
         let path_str = normalize_canonical_path(&canonical);
@@ -589,6 +608,7 @@ impl Scanner {
             stats.movies += 1;
             stats.media += 1;
         }
+        self.throttle_scan_write().await;
         Ok(())
     }
 
@@ -806,12 +826,36 @@ impl Scanner {
             stats.episodes += 1;
             stats.media += 1;
         }
+        self.throttle_scan_write().await;
         Ok(())
     }
 
     // -----------------------------------------------------------------------
     // 辅助方法
     // -----------------------------------------------------------------------
+
+    /// 扫描写库节流：每处理 `yield_every_files` 个文件，主动 `wal_checkpoint(TRUNCATE)`
+    /// 把 WAL 刷回主库并截断（释放 WAL 增长、给等待中的读者/认证写一个干净窗口），
+    /// 再休眠 `yield_ms` 让出 sqlite 写锁。`yield_every_files=0` 时直接返回（不节流）。
+    ///
+    /// 仅在持 SCAN_MUTEX 的扫描路径调用，file_counter 无跨任务竞争。
+    async fn throttle_scan_write(&self) {
+        if self.yield_every_files == 0 || self.yield_ms == 0 {
+            return;
+        }
+        let n = self
+            .file_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        if !n.is_multiple_of(self.yield_every_files) {
+            return;
+        }
+        // checkpoint 失败不致命（WAL 会自行在增长阈值时 checkpoint），忽略错误。
+        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(self.db.pool())
+            .await;
+        tokio::time::sleep(std::time::Duration::from_millis(self.yield_ms)).await;
+    }
 
     /// 创建或获取 library + library_path 记录。
     async fn upsert_library(&self, name: &str, path: &str) -> Result<i64> {

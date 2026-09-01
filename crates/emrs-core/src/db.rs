@@ -12,8 +12,10 @@
 
 use anyhow::{Context, Result, bail};
 use sqlx::AnyPool;
+use sqlx::Executor;
 use sqlx::any::AnyPoolOptions;
 use sqlx::migrate::Migrator;
+use tracing::info;
 
 use crate::config::StorageConfig;
 
@@ -88,8 +90,28 @@ impl Db {
         }
         // 必须先于任何 Any 池创建
         sqlx::any::install_default_drivers();
-        let pool = AnyPoolOptions::new()
-            .max_connections(cfg.max_connections)
+        let mut options = AnyPoolOptions::new().max_connections(cfg.max_connections);
+        if dialect == Dialect::Sqlite {
+            // sqlite 单写者模型：大扫描期间 scanner 持续写，HTTP 读（认证/登录/管理查询）
+            // 在默认 rollback journal 模式下会阻塞在读锁后，触发 `database is locked`。
+            // 三个 PRAGMA 对症（WAL 要求 data 卷为本地文件锁可靠的文件系统，容器本地卷满足）：
+            // - journal_mode = WAL：读不阻塞写、写不阻塞读（读者读快照，不回滚日志锁）；
+            // - synchronous = NORMAL：WAL 下提交不再逐笔 fsync（仅 checkpoint fsync），
+            //   把容器盘上单写 1~5s 的 fsync 开销降到亚毫秒——写锁占用窗口骤减，才是根因；
+            //   掉电仅可能丢最近几笔已提交事务（媒体库可重扫，可接受）。
+            // - busy_timeout：写写争用（扫描/探测/刮削并发写）时等待而不是立刻报错。
+            // after_connect 在每个新建连接上执行，覆盖池内全部连接。
+            options = options.after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    conn.execute("PRAGMA journal_mode = WAL").await?;
+                    conn.execute("PRAGMA synchronous = NORMAL").await?;
+                    conn.execute("PRAGMA busy_timeout = 10000").await?;
+                    Ok(())
+                })
+            });
+            info!("sqlite 并发调优已生效: WAL + synchronous=NORMAL + busy_timeout=10000ms");
+        }
+        let pool = options
             .connect(&cfg.dsn)
             .await
             .with_context(|| format!("连接数据库失败: {}", cfg.dsn))?;

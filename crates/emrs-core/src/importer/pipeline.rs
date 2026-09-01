@@ -139,10 +139,12 @@ impl Pipeline {
                 _ = tokio::time::sleep(interval) => {}
             }
 
-            let stage = ScanStage::with_tmdb(
+            let stage = ScanStage::with_tmdb_and_yield(
                 self.db.clone(),
                 self.tmdb_api_key.clone(),
                 self.proxy_url.clone(),
+                self.config.scan_yield_every_files,
+                self.config.scan_yield_ms,
             );
 
             let pending = stage.pending_scan_jobs().await;
@@ -207,10 +209,18 @@ impl Pipeline {
                 _ = tokio::time::sleep(interval) => {}
             }
 
-            let stage =
-                ProbeStage::with_concurrency(self.db.clone(), self.config.probe_concurrency);
+            let stage = ProbeStage::with_concurrency_and_yield(
+                self.db.clone(),
+                self.config.probe_concurrency,
+                self.config.probe_yield_ms,
+            );
             let (total, ok, failed) = stage.run_pending(batch).await;
             if total > 0 {
+                // 收尾 checkpoint：把本轮探测写入的 WAL 刷回主库并截断，
+                // 避免长扫描 + 探测期间 WAL 文件无界增长。
+                let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                    .execute(self.db.pool())
+                    .await;
                 info!(total, ok, failed, "probe 阶段处理完成");
             }
         }
@@ -316,6 +326,13 @@ impl Pipeline {
                 count += 1;
                 info!(media_source_id = id, path = %p, "检测到文件删除，已物理删除");
             }
+        }
+
+        // 删除检测逐行 autocommit DELETE，收尾主动 checkpoint 把 WAL 刷回主库并截断。
+        if count > 0 {
+            let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .execute(self.db.pool())
+                .await;
         }
 
         Ok(count)

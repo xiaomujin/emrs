@@ -30,7 +30,19 @@ impl ScanStage {
     }
 
     pub fn with_tmdb(db: Arc<Db>, tmdb_api_key: String, proxy_url: Option<String>) -> Self {
-        let scanner = Scanner::with_proxy(db.clone(), tmdb_api_key, proxy_url);
+        Self::with_tmdb_and_yield(db, tmdb_api_key, proxy_url, 0, 0)
+    }
+
+    /// 带扫描写库节流参数的构造（`yield_every_files`/`yield_ms` 见 [`Scanner::with_yield`]）。
+    pub fn with_tmdb_and_yield(
+        db: Arc<Db>,
+        tmdb_api_key: String,
+        proxy_url: Option<String>,
+        yield_every_files: usize,
+        yield_ms: u64,
+    ) -> Self {
+        let scanner = Scanner::with_proxy(db.clone(), tmdb_api_key, proxy_url)
+            .with_yield(yield_every_files, yield_ms);
         Self { db, scanner }
     }
 

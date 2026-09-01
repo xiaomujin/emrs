@@ -145,6 +145,13 @@ pub struct PipelineConfig {
     pub scrape_rate_limit_per_sec: u32,
     /// 删除检测兜底间隔（秒，默认 3600）；扫描完成后必触发一次。
     pub delete_check_interval_secs: u64,
+    /// 扫描写库节流：每处理 N 个媒体文件让出一次写锁（默认 200，0 关闭）。
+    /// 大库首扫时避免扫描任务长时间独占 sqlite 写锁，饿死 HTTP 认证/读。
+    pub scan_yield_every_files: usize,
+    /// 扫描每让出一次的休眠毫秒（默认 50，配合 `scan_yield_every_files`）。
+    pub scan_yield_ms: u64,
+    /// Probe 批次之间让出写锁的毫秒（默认 20，0 关闭）。
+    pub probe_yield_ms: u64,
 }
 
 impl Default for PipelineConfig {
@@ -157,6 +164,9 @@ impl Default for PipelineConfig {
             scrape_retry_max_attempts: 5,
             scrape_rate_limit_per_sec: 3,
             delete_check_interval_secs: 3600,
+            scan_yield_every_files: 200,
+            scan_yield_ms: 50,
+            probe_yield_ms: 20,
         }
     }
 }

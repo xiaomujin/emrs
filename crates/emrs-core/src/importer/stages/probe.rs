@@ -18,11 +18,17 @@ pub struct ProbeStage {
     db: Arc<Db>,
     /// 单批并发度（默认 2，即同时在飞的 ffprobe 进程数上限）。
     concurrency: usize,
+    /// 批次之间让出写锁的毫秒（0 关闭）。见 `run_pending`。
+    yield_ms: u64,
 }
 
 impl ProbeStage {
     pub fn new(db: Arc<Db>) -> Self {
-        Self { db, concurrency: 2 }
+        Self {
+            db,
+            concurrency: 2,
+            yield_ms: 0,
+        }
     }
 
     /// 指定并发度（pipeline 配置 probe_concurrency）。
@@ -30,6 +36,16 @@ impl ProbeStage {
         Self {
             db,
             concurrency: concurrency.max(1),
+            yield_ms: 0,
+        }
+    }
+
+    /// 指定并发度 + 批次间让出写锁毫秒（pipeline 配置 probe_yield_ms）。
+    pub fn with_concurrency_and_yield(db: Arc<Db>, concurrency: usize, yield_ms: u64) -> Self {
+        Self {
+            db,
+            concurrency: concurrency.max(1),
+            yield_ms,
         }
     }
 
@@ -87,6 +103,15 @@ impl ProbeStage {
                     Ok((_, false)) => fail_count += 1,
                     Err(e) => warn!(error = %e, "probe 任务异常"),
                 }
+            }
+
+            // 批次之间主动 checkpoint + 让出写锁：探测期间每 chunk 会连续
+            // UPDATE media_source，让认证/HTTP 读有机会插队（yield_ms=0 时跳过）。
+            if self.yield_ms > 0 {
+                let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                    .execute(self.db.pool())
+                    .await;
+                tokio::time::sleep(std::time::Duration::from_millis(self.yield_ms)).await;
             }
         }
 

@@ -62,6 +62,13 @@ pipeline:
   scrape_rate_limit_per_sec: 3
   # 删除检测兜底间隔（秒）；每次扫描完成后必触发一次
   delete_check_interval_secs: 3600
+  # —— sqlite 写库节流（仅 WAL 生效；大库首扫时避免扫描/探测长时间独占写锁饿死认证/读）——
+  # 扫描每处理 N 个媒体文件让出一次写锁（0 关闭）
+  scan_yield_every_files: 200
+  # 扫描每让出一次的休眠毫秒
+  scan_yield_ms: 50
+  # probe 每批之间让出写锁的毫秒（0 关闭）
+  probe_yield_ms: 20
 
 # 媒体库导入通过后台管理接口配置，无需在配置文件中设置：
 #   POST /admin/libraries          创建库（配置路径）
