@@ -11,6 +11,7 @@
 use anyhow::Result;
 use tracing::info;
 
+use crate::importer::nfo::Nfo;
 use crate::importer::tmdb::{
     Credits, EpisodeBrief, MovieDetail, SeasonBrief, TmdbMovie, TmdbScraper, TmdbTv, TvDetail,
     best_logo, extract_year,
@@ -1237,6 +1238,145 @@ impl Scanner {
             .await
             .unwrap_or(0);
         (new_id, new_id > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // NFO 兜底落库（扫描期调用；无 TMDB 刮削时的唯一元数据来源）
+    // -----------------------------------------------------------------------
+
+    /// 把 NFO 的关系型元数据写入规范表 + 关联表 + 图片：分类 / 制片 / 标签 /
+    /// 演员（含角色与头像）/ 海报 / 背景。标量字段（tagline/status/评分/分级）由
+    /// `update_item_meta` 负责，本方法只处理需要建关联行的部分。
+    ///
+    /// 全部幂等：genre/studio/tag 按 name upsert（NFO 无 tmdb_id），`item_*` 关联走
+    /// `INSERT OR IGNORE`；演员按 profile 解析出的 TMDB 人物 id upsert（与后续 TMDB
+    /// 刮削命中同一行，天然去重），无 profile（无 tmdb_id）的演员跳过——people.tmdb_id
+    /// NOT NULL UNIQUE 无法用姓名可靠落库。
+    pub(super) async fn apply_nfo_relations(&self, item_id: i64, nfo: &Nfo) {
+        let now = crate::emby::format_time_now();
+
+        for g in &nfo.genres {
+            if g.trim().is_empty() {
+                continue;
+            }
+            let gid = self.upsert_genre_by_name(g).await;
+            self.link_genre(item_id, gid).await;
+        }
+
+        let mut sort_order: i64 = 0;
+        for s in &nfo.studios {
+            if s.trim().is_empty() {
+                continue;
+            }
+            let sid = self.upsert_studio_by_name(s).await;
+            if sid > 0 {
+                let _ = sqlx::query(
+                    "INSERT OR IGNORE INTO item_studio (item_id, studio_id, sort_order) VALUES (?, ?, ?)",
+                )
+                .bind(item_id)
+                .bind(sid)
+                .bind(sort_order)
+                .execute(self.db.pool())
+                .await;
+                sort_order += 1;
+            }
+        }
+
+        let mut sort_order: i64 = 0;
+        for t in &nfo.tags {
+            if t.trim().is_empty() {
+                continue;
+            }
+            let tid = self.upsert_tag_by_name(t).await;
+            if tid > 0 {
+                let _ = sqlx::query(
+                    "INSERT OR IGNORE INTO item_tag (item_id, tag_id, sort_order) VALUES (?, ?, ?)",
+                )
+                .bind(item_id)
+                .bind(tid)
+                .bind(sort_order)
+                .execute(self.db.pool())
+                .await;
+                sort_order += 1;
+            }
+        }
+
+        let mut sort_order: i64 = 0;
+        for a in &nfo.actors {
+            let Some(id_str) = a.tmdb_id.as_deref() else {
+                continue;
+            };
+            let Ok(tmdb_id) = id_str.parse::<i64>() else {
+                continue;
+            };
+            let (people_id, _) = self.upsert_people(tmdb_id, &a.name, None, None, &now).await;
+            if people_id <= 0 {
+                continue;
+            }
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO item_people (item_id, people_id, role, character_name, sort_order) \
+                 VALUES (?, ?, 'Actor', ?, ?)",
+            )
+            .bind(item_id)
+            .bind(people_id)
+            .bind(a.role.as_deref())
+            .bind(sort_order)
+            .execute(self.db.pool())
+            .await;
+            sort_order += 1;
+            if let Some(thumb) = a.thumb.as_deref() {
+                self.attach_image_for("people", people_id, "primary", thumb)
+                    .await;
+            }
+        }
+
+        if let Some(poster) = nfo.poster.as_deref() {
+            self.attach_image(item_id, "primary", poster).await;
+        }
+        for backdrop in &nfo.backdrops {
+            self.attach_image(item_id, "backdrop", backdrop).await;
+        }
+    }
+
+    /// 按 name upsert genre（NFO 无 tmdb_id）：命中复用，否则插入 `tmdb_id=NULL` 行。失败返回 0。
+    async fn upsert_genre_by_name(&self, name: &str) -> i64 {
+        self.upsert_taxonomy_by_name("genre", name).await
+    }
+    /// 按 name upsert studio（NFO 无 tmdb_id）。失败返回 0。
+    async fn upsert_studio_by_name(&self, name: &str) -> i64 {
+        self.upsert_taxonomy_by_name("studio", name).await
+    }
+    /// 按 name upsert tag（NFO 无 tmdb_id）。失败返回 0。
+    async fn upsert_tag_by_name(&self, name: &str) -> i64 {
+        self.upsert_taxonomy_by_name("tag", name).await
+    }
+
+    /// genre / studio / tag 三表结构相同（id, tmdb_id, name），共用按 name 的 upsert。
+    /// `table` 仅接受字面量 "genre"|"studio"|"tag"（无注入风险）。
+    async fn upsert_taxonomy_by_name(&self, table: &'static str, name: &str) -> i64 {
+        let now = crate::emby::format_time_now();
+        let existing: Option<i64> =
+            sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE name = ? LIMIT 1"))
+                .bind(name)
+                .fetch_optional(self.db.pool())
+                .await
+                .ok()
+                .flatten();
+        if let Some(id) = existing {
+            return id;
+        }
+        let _ = sqlx::query(&format!(
+            "INSERT INTO {table} (name, created_at, updated_at) VALUES (?, ?, ?)"
+        ))
+        .bind(name)
+        .bind(&now)
+        .bind(&now)
+        .execute(self.db.pool())
+        .await;
+        sqlx::query_scalar::<_, i64>(&format!("SELECT id FROM {table} ORDER BY id DESC LIMIT 1"))
+            .fetch_one(self.db.pool())
+            .await
+            .unwrap_or(0)
     }
 }
 

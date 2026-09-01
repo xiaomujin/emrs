@@ -573,6 +573,10 @@ impl Scanner {
                 nfo.imdb_id.as_deref(),
                 nfo.tvdb_id.as_deref(),
                 nfo.runtime,
+                nfo.tagline.as_deref(),
+                nfo.status.as_deref(),
+                nfo.official_rating.as_deref(),
+                nfo.community_rating,
             )
             .await;
         }
@@ -595,9 +599,9 @@ impl Scanner {
         self.attach_subtitles_by_stem(media_source_id, stem, subtitle_files)
             .await;
 
-        // 附件：海报（NFO 图片 > TMDB 海报——由 scrape_movie 已写入）
-        for img_url in nfo.iter().flat_map(|n| n.images.clone()) {
-            self.attach_image(item_id, "primary", &img_url).await;
+        // NFO 富元数据兜底：分类/制片/标签/演员/海报/背景（幂等，重扫不 churn）。
+        if let Some(ref nfo) = nfo {
+            self.apply_nfo_relations(item_id, nfo).await;
         }
 
         if reused {
@@ -700,12 +704,14 @@ impl Scanner {
                 snfo.imdb_id.as_deref(),
                 snfo.tvdb_id.as_deref(),
                 snfo.runtime,
+                snfo.tagline.as_deref(),
+                snfo.status.as_deref(),
+                snfo.official_rating.as_deref(),
+                snfo.community_rating,
             )
             .await;
-            // Series 海报
-            for img_url in &snfo.images {
-                self.attach_image(series_item_id, "primary", img_url).await;
-            }
+            // Series 富元数据兜底：分类/制片/标签/演员/海报/背景。
+            self.apply_nfo_relations(series_item_id, snfo).await;
         }
 
         // TMDB Series 刮削不在扫描期执行（元数据分离）：Scrape 阶段消费
@@ -777,22 +783,23 @@ impl Scanner {
         }
 
         // 单集 NFO 元数据
-        if let Some(ref en) = nfo
-            && (en.description.is_some() || en.air_date.is_some() || en.tmdb_id.is_some())
-        {
-            let now = crate::emby::format_time_now();
-            if en.description.is_some() || en.air_date.is_some() {
-                let q = "UPDATE item SET description = COALESCE(?, description), date_air = COALESCE(?, date_air), updated_at = ? WHERE id = ?";
-                let d = en.description.as_deref().unwrap_or("");
-                let da = en.air_date.as_deref().unwrap_or("");
-                let _ = sqlx::query(q)
-                    .bind(d)
-                    .bind(da)
-                    .bind(&now)
-                    .bind(episode_item_id)
-                    .execute(self.db.pool())
-                    .await;
-            }
+        if let Some(ref en) = nfo {
+            self.update_item_meta(
+                episode_item_id,
+                &episode_title,
+                en.description.as_deref(),
+                en.air_date.as_deref(),
+                en.year,
+                en.tmdb_id.as_deref(),
+                en.imdb_id.as_deref(),
+                en.tvdb_id.as_deref(),
+                en.runtime,
+                en.tagline.as_deref(),
+                en.status.as_deref(),
+                en.official_rating.as_deref(),
+                en.community_rating,
+            )
+            .await;
         }
 
         // 4. 落 media_source：同路径重复文件保留旧行不 churn，否则替换该条目既有源。
@@ -809,10 +816,9 @@ impl Scanner {
         self.attach_subtitles_by_stem(media_source_id, stem, subtitle_files)
             .await;
 
-        // 附件：单集海报（NFO 图片）
-        for img_url in nfo.iter().flat_map(|n| n.images.clone()) {
-            self.attach_image(episode_item_id, "primary", &img_url)
-                .await;
+        // 单集 NFO 富元数据兜底：分类/制片/标签/演员/海报（幂等）。
+        if let Some(ref en) = nfo {
+            self.apply_nfo_relations(episode_item_id, en).await;
         }
 
         if reused {
@@ -1100,6 +1106,10 @@ impl Scanner {
         imdb_id: Option<&str>,
         tvdb_id: Option<&str>,
         runtime: Option<i64>,
+        tagline: Option<&str>,
+        status: Option<&str>,
+        official_rating: Option<&str>,
+        community_rating: Option<f64>,
     ) {
         let now = crate::emby::format_time_now();
         // NFO `<runtime>` 是分钟，DB 约定存秒（×60，与 TMDB 刮削路径一致）。
@@ -1115,6 +1125,10 @@ impl Scanner {
              runtime = COALESCE(?, runtime), \
              production_year = COALESCE(?, production_year), \
              sort_title = COALESCE(?, sort_title), \
+             tagline = COALESCE(?, tagline), \
+             status = COALESCE(?, status), \
+             official_rating = COALESCE(?, official_rating), \
+             community_rating = COALESCE(?, community_rating), \
              updated_at = ? WHERE id = ?",
         )
         .bind(description)
@@ -1125,6 +1139,10 @@ impl Scanner {
         .bind(runtime_secs)
         .bind(year.map(|y| y as i64))
         .bind(sort.as_str())
+        .bind(tagline)
+        .bind(status)
+        .bind(official_rating)
+        .bind(community_rating)
         .bind(&now)
         .bind(id)
         .execute(self.db.pool())

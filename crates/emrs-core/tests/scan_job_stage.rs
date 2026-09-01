@@ -316,3 +316,226 @@ async fn season_zero_folder_is_not_merged_into_season_one() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// NFO 富元数据兜底回归：无 TMDB 时，扫描期须把 NFO 的分类/制片/标签/演员
+/// （含角色、头像、profile 解析出的 TMDB 人物 id）/ 海报 / 背景 / 标量
+/// （tagline/status/official_rating/community_rating）全部落库，且重扫幂等不产生重复行。
+#[tokio::test]
+#[allow(clippy::type_complexity)]
+async fn nfo_metadata_populates_taxonomy_and_scalars() {
+    use emrs_core::importer::scanner::Scanner;
+
+    let dir = std::env::temp_dir().join(format!("emrs-nfo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("The Movie 2020.strm"), b"http://x/movie.mp4\n").unwrap();
+    let nfo = r#"<?xml version="1.0" encoding="UTF-8"?>
+<movie>
+  <title>The Movie</title>
+  <year>2020</year>
+  <plot>一段剧情。</plot>
+  <tagline>标语在此</tagline>
+  <status>Finished</status>
+  <certification>R-18</certification>
+  <ratings>
+    <rating default="true" max="10" name="themoviedb"><value>7.5</value><votes>42</votes></rating>
+  </ratings>
+  <uniqueid default="true" type="tmdb">478804</uniqueid>
+  <uniqueid default="false" type="imdb">tt7479784</uniqueid>
+  <thumb aspect="poster">http://img/poster.jpg</thumb>
+  <fanart><thumb>http://img/bg1.jpg</thumb></fanart>
+  <genre>惊悚</genre>
+  <genre>推理</genre>
+  <genre>剧情</genre>
+  <studio>Atom</studio>
+  <studio>Fox</studio>
+  <studio>Mandarin</studio>
+  <tag>revenge</tag>
+  <tag>politics</tag>
+  <actor>
+    <name>惠英红</name>
+    <role>Madame Tang</role>
+    <thumb>http://img/hkr.jpg</thumb>
+    <profile>https://www.themoviedb.org/person/84205</profile>
+  </actor>
+  <actor>
+    <name>吴可熙</name>
+    <role>Tang Ning</role>
+    <thumb>http://img/wkx.jpg</thumb>
+    <profile>https://www.themoviedb.org/person/1294367</profile>
+  </actor>
+  <actor>
+    <name>巫书维</name>
+    <role>Marco</role>
+    <thumb/>
+  </actor>
+</movie>"#;
+    std::fs::write(dir.join("The Movie 2020.nfo"), nfo).unwrap();
+
+    let db = Arc::new(
+        Db::connect(&emrs_core::config::StorageConfig {
+            dsn: format!(
+                "sqlite:{}?mode=rwc",
+                dir.join("n.db").to_string_lossy().replace('\\', "/")
+            ),
+            max_connections: 2,
+        })
+        .await
+        .unwrap(),
+    );
+    db.migrate().await.unwrap();
+
+    let scanner = Scanner::new(db.clone(), String::new());
+    scanner.scan_path(&dir).await.unwrap();
+
+    let movie_id: i64 = sqlx::query_scalar("SELECT id FROM item WHERE type = 'movie'")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+
+    // 分类 / 制片 / 标签：3 / 3 / 2，均关联到该电影。
+    let genre_links: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM item_genre WHERE item_id = ?")
+        .bind(movie_id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let studio_links: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM item_studio WHERE item_id = ?")
+            .bind(movie_id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    let tag_links: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM item_tag WHERE item_id = ?")
+        .bind(movie_id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(genre_links, 3, "三个 genre 应全部落库");
+    assert_eq!(studio_links, 3, "三个 studio 应全部落库");
+    assert_eq!(tag_links, 2, "两个 tag 应全部落库");
+
+    // 演员：两条带 profile 者入库（tmdb_id 取自 person/<id>），无 profile 者跳过。
+    let people_links: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM item_people WHERE item_id = ?")
+            .bind(movie_id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(people_links, 2, "仅两条带 profile 的演员落库");
+    let (role, character): (String, Option<String>) = sqlx::query_as(
+        "SELECT ip.role, ip.character_name FROM item_people ip \
+         JOIN people p ON p.id = ip.people_id \
+         WHERE ip.item_id = ? AND p.tmdb_id = '84205'",
+    )
+    .bind(movie_id)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(role, "Actor");
+    assert_eq!(character.as_deref(), Some("Madame Tang"));
+    let has_skipped: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM people WHERE tmdb_id = '2894531'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(has_skipped, 0, "无 profile 的演员不得入库");
+    // 演员头像挂到 people。
+    let actor_img: Option<String> = sqlx::query_scalar(
+        "SELECT ii.path_url FROM item_image ii \
+         JOIN item_people ip ON ip.people_id = ii.parent_id \
+         JOIN people p ON p.id = ip.people_id \
+         WHERE ii.parent_type = 'people' AND ii.image_type = 'primary' AND p.tmdb_id = '84205'",
+    )
+    .bind(movie_id)
+    .fetch_optional(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        actor_img.as_deref(),
+        Some("http://img/hkr.jpg"),
+        "演员头像须落库"
+    );
+
+    // 海报 primary + 背景 backdrop。
+    let primary: Option<String> = sqlx::query_scalar(
+        "SELECT path_url FROM item_image WHERE parent_type='item' AND parent_id=? AND image_type='primary'",
+    )
+    .bind(movie_id)
+    .fetch_optional(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        primary.as_deref(),
+        Some("http://img/poster.jpg"),
+        "海报不得被人像/背景覆盖"
+    );
+    let backdrops: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM item_image WHERE parent_type='item' AND parent_id=? AND image_type='backdrop'",
+    )
+    .bind(movie_id)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(backdrops, 1, "fanart 背景须落库");
+
+    // 标量：tagline / status / official_rating / community_rating / id。
+    let (tagline, status, official, community, tmdb, imdb): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<f64>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT tagline, status, official_rating, community_rating, tmdb_id, imdb_id \
+         FROM item WHERE id = ?",
+    )
+    .bind(movie_id)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(tagline.as_deref(), Some("标语在此"));
+    assert_eq!(status.as_deref(), Some("Finished"));
+    assert_eq!(official.as_deref(), Some("R-18"));
+    assert_eq!(community, Some(7.5), "嵌套 ratings/value 应解析为社区评分");
+    assert_eq!(tmdb.as_deref(), Some("478804"));
+    assert_eq!(imdb.as_deref(), Some("tt7479784"));
+
+    // 幂等：重扫不得产生重复的规范行/关联行。
+    scanner.scan_path(&dir).await.unwrap();
+    let genre_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM genre")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let studio_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM studio")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let tag_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tag")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let people_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM people")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let item_people_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM item_people")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let item_image_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM item_image")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(genre_rows, 3, "重扫 genre 表不得增长");
+    assert_eq!(studio_rows, 3, "重扫 studio 表不得增长");
+    assert_eq!(tag_rows, 2, "重扫 tag 表不得增长");
+    assert_eq!(people_rows, 2, "重扫 people 表不得增长");
+    assert_eq!(item_people_rows, 2, "重扫 item_people 不得增长");
+    assert_eq!(
+        item_image_rows, 4,
+        "重扫 item_image 不得增长（海报1+背景1+演员2）"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
