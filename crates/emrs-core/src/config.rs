@@ -239,7 +239,7 @@ impl Default for EmbyConfig {
 impl Default for PlaybackConfig {
     fn default() -> Self {
         Self {
-            signing_key: None,
+            signing_key: Some("emrs_signing_key".into()),
             ticket_ttl_secs: 3600,
             redirect_cache_ttl_secs: 3 * 3600,
             strm_probe_backfill: true,
