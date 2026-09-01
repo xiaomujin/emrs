@@ -17,7 +17,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "registry", "l
 thiserror = "2"
 anyhow = "1"
 async-trait = "0.1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "mysql", "postgres", "any", "migrate", "chrono", "derive"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "mysql", "postgres", "any", "migrate", "chrono", "derive", "macros"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 moka = { version = "0.12", features = ["future"] }
 config = "0.14"

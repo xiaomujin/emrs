@@ -2,14 +2,13 @@
 //!
 //! 关键约定：
 //! - **任何池创建前必须调用 `sqlx::any::install_default_drivers()`**（[`Db::connect`] 内已做）
-//! - 迁移目录按方言分仓：`migrations/{sqlite|mysql|postgres}/`，版本文件成对
+//! - 迁移按方言分仓：`migrations/{sqlite|mysql|postgres}/`，版本文件成对
 //!   `<版本>_<名称>.up.sql` / `.down.sql`（6 个迁移按功能分类：auth_user /
 //!   library / item / media / user_data / system，覆盖 20 张业务表；即清理后的最终形态，
-//!   旧库不兼容，需重建）
+//!   旧库不兼容，需重建）。迁移 SQL 由 `sqlx::migrate!` **编译期内嵌**进二进制，
+//!   运行时不依赖源码目录（见 [`Dialect::migrator`]）
 //! - JSON 类列在 Any 驱动下一律按 TEXT 读写，serde 反序列化在应用层完成
 //! - PG/MySQL 分区表迁移后自动创建当月/下月分区（[`Db::ensure_partitions`]）
-
-use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use sqlx::AnyPool;
@@ -17,6 +16,24 @@ use sqlx::any::AnyPoolOptions;
 use sqlx::migrate::Migrator;
 
 use crate::config::StorageConfig;
+
+/// 三方言迁移在编译期内嵌进二进制（`sqlx::migrate!` 读取 `migrations/<dialect>/`），
+/// 运行时不再依赖源码目录，发布物（Docker / 独立二进制）自包含。
+/// 与旧 `Migrator::new(dir)` 读盘校验和算法一致，已应用迁移不会因换方式而失配。
+static SQLITE_MIGRATOR: Migrator = sqlx::migrate!("migrations/sqlite");
+static MYSQL_MIGRATOR: Migrator = sqlx::migrate!("migrations/mysql");
+static POSTGRES_MIGRATOR: Migrator = sqlx::migrate!("migrations/postgres");
+
+impl Dialect {
+    /// 返回本方言编译期内嵌的迁移器。
+    pub fn migrator(self) -> &'static Migrator {
+        match self {
+            Dialect::Sqlite => &SQLITE_MIGRATOR,
+            Dialect::Mysql => &MYSQL_MIGRATOR,
+            Dialect::Postgres => &POSTGRES_MIGRATOR,
+        }
+    }
+}
 
 /// 当前数据库方言。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,15 +54,6 @@ impl Dialect {
             Ok(Dialect::Postgres)
         } else {
             bail!("无法识别的存储 DSN（支持 sqlite:/mysql:/postgres:）: {dsn}")
-        }
-    }
-
-    /// 迁移子目录名。
-    pub fn dir_name(self) -> &'static str {
-        match self {
-            Dialect::Sqlite => "sqlite",
-            Dialect::Mysql => "mysql",
-            Dialect::Postgres => "postgres",
         }
     }
 
@@ -96,13 +104,13 @@ impl Db {
         &self.pool
     }
 
-    /// 按方言执行 `migrations/{dialect}` 下的迁移；已应用的版本自动跳过（幂等）。
+    /// 按方言执行编译期内嵌的迁移；已应用的版本自动跳过（幂等）。
     pub async fn migrate(&self) -> Result<()> {
-        let dir = migrations_root().join(self.dialect.dir_name());
-        let migrator = Migrator::new(dir.clone())
+        self.dialect
+            .migrator()
+            .run(&self.pool)
             .await
-            .with_context(|| format!("加载迁移目录失败: {}", dir.display()))?;
-        migrator.run(&self.pool).await.context("执行迁移失败")?;
+            .context("执行迁移失败")?;
         // PG/MySQL: 自动创建当月/下月分区
         if self.dialect != Dialect::Sqlite {
             self.ensure_partitions().await;
@@ -171,11 +179,6 @@ impl Db {
     }
 }
 
-/// 迁移目录根：编译期锚定在 emrs-core crate 内，测试与发布物一致。
-fn migrations_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations")
-}
-
 /// sqlite 文件库自动建父目录；内存库跳过。
 fn ensure_sqlite_parent_dir(dsn: &str) -> Result<()> {
     let path = dsn
@@ -217,18 +220,25 @@ mod tests {
     }
 
     #[test]
-    fn migrations_dirs_exist() {
+    fn migrations_are_embedded() {
         for d in [Dialect::Sqlite, Dialect::Mysql, Dialect::Postgres] {
-            let dir = migrations_root().join(d.dir_name());
+            let m = d.migrator();
             assert!(
-                dir.join("0001_auth_user.up.sql").exists(),
-                "缺少 {}",
-                dir.display()
+                m.migrations.len() >= 6,
+                "{:?} 内嵌迁移数异常: {}",
+                d,
+                m.migrations.len()
             );
             assert!(
-                dir.join("0001_auth_user.down.sql").exists(),
-                "缺少 down: {}",
-                dir.display()
+                m.migrations.iter().any(|mig| mig.version == 1
+                    && mig.description.contains("auth")
+                    && !mig.sql.is_empty()),
+                "{:?} 缺少已内嵌的 0001_auth_user: {:?}",
+                d,
+                m.migrations
+                    .iter()
+                    .map(|x| (x.version, &x.description))
+                    .collect::<Vec<_>>()
             );
         }
     }
