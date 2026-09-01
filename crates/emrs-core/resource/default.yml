@@ -28,6 +28,11 @@ playback:
   signing_key: ""
   ticket_ttl_secs: 3600
   redirect_cache_ttl_secs: 10800
+  # strm/http 直链播放期缺流信息时异步 ffprobe 回填（当前请求不阻塞，
+  # 同条目下次请求即有完整流信息/时长）。
+  strm_probe_backfill: true
+  # 单次 strm 后台 ffprobe 探测超时（秒），远端 URL 挂起时兜底。
+  strm_probe_timeout_secs: 30
 
 cloud:
   # 启用的 driver 列表（当前仅 http 直链 302）

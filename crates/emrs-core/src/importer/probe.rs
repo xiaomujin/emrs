@@ -390,6 +390,9 @@ pub async fn probe_media_checked(path: &Path) -> Result<ProbeMedia, String> {
             "-show_chapters",
         ])
         .arg(path)
+        // 丢弃 future（如外层 timeout 触发）时杀掉 ffprobe 子进程，
+        // 避免网络挂死的探测进程随调用方 drop 泄漏累积。
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|e| format!("ffprobe 执行失败: {e}"))?;

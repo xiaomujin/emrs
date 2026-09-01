@@ -100,6 +100,12 @@ pub struct PlaybackConfig {
     pub ticket_ttl_secs: i64,
     /// 302 直链结果缓存上限（秒）
     pub redirect_cache_ttl_secs: u64,
+    /// strm/http 直链播放期缺流信息时异步 ffprobe 回填总开关（默认 true）。
+    /// Probe 阶段只探测本地 file 源，strm 由播放请求命中时后台回填
+    /// `media_source.metadata`/`file_duration`，当前请求不阻塞。
+    pub strm_probe_backfill: bool,
+    /// 单次 strm 后台 ffprobe 超时（秒，默认 30）。远端 URL 可能挂起，必须兜底。
+    pub strm_probe_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -216,6 +222,8 @@ impl Default for PlaybackConfig {
             signing_key: None,
             ticket_ttl_secs: 3600,
             redirect_cache_ttl_secs: 3 * 3600,
+            strm_probe_backfill: true,
+            strm_probe_timeout_secs: 30,
         }
     }
 }
