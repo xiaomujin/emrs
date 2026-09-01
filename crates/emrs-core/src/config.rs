@@ -122,7 +122,7 @@ pub struct TmdbConfig {
     pub api_key: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct HttpConfig {
     /// 外部请求代理地址，如 `http://127.0.0.1:7890`。
@@ -177,7 +177,7 @@ impl Default for PipelineConfig {
             scrape_concurrency: 4,
             poll_interval_secs: 10,
             scrape_retry_max_attempts: 5,
-            scrape_rate_limit_per_sec: 3,
+            scrape_rate_limit_per_sec: 20,
             delete_check_interval_secs: 3600,
             scan_yield_every_files: 200,
             scan_yield_ms: 50,
@@ -193,6 +193,17 @@ impl Default for PipelineConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self { port: 8080 }
+    }
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            proxy_url: None,
+            hosts_url: Some("https://gh-proxy.com/https://raw.githubusercontent.com/cnwikee/CheckTMDB/refs/heads/main/Tmdb_host_ipv4".into()),
+            hosts_file: Some("data/tmdb_hosts.txt".into()),
+            hosts_inline: vec![],
+        }
     }
 }
 
