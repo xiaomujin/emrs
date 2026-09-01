@@ -241,7 +241,7 @@ impl Scanner {
             "时长回填"
         );
         let meta = MediaMeta {
-            file_size: None,
+            file_size: media.format_size,
             file_second,
             container: container.clone(),
             streams: media.streams,

@@ -366,6 +366,10 @@ pub struct ProbeMedia {
     /// （[`probe_duration`]）只认 MP4 moov / MKV Duration，fragmented MP4、
     /// TS/AVI/WMV 等容器拿不到时长时以此为回填源。
     pub format_duration: Option<i64>,
+    /// ffprobe `format.size`（字节）。strm 直链无本地文件、扫描期拿不到大小，
+    /// 播放期回填时以此为源；本地 file 源扫描期已 stat 到精确大小，回填值等价。
+    /// 注意：CDN/直链对 `format.size` 未必返回，缺失时为 None（保持原值不动）。
+    pub format_size: Option<i64>,
 }
 
 /// 用 ffprobe 解析流信息 + 章节（`-show_streams -show_format -show_chapters`）。
@@ -405,7 +409,14 @@ pub async fn probe_media_checked(path: &Path) -> Result<ProbeMedia, String> {
         streams: parse_streams_json(&json),
         chapters: parse_chapters_json(&json),
         format_duration: parse_format_duration(&json),
+        format_size: parse_format_size(&json),
     })
+}
+
+/// ffprobe `format.size`（字符串或数字，字节）→ i64。缺失/非法/非正返回 None。
+fn parse_format_size(json: &serde_json::Value) -> Option<i64> {
+    let bytes = json_i64(json.get("format")?.get("size"))?;
+    if bytes > 0 { Some(bytes) } else { None }
 }
 
 /// ffprobe `format.duration`（字符串或数字，秒为单位的浮点）→ 四舍五入秒。
@@ -915,5 +926,22 @@ mod tests {
     #[test]
     fn chapters_missing_is_empty() {
         assert!(parse_chapters_json(&serde_json::json!({ "streams": [] })).is_empty());
+    }
+
+    #[test]
+    fn format_size_accepts_string_or_number_and_rejects_nonpositive() {
+        let string_form = serde_json::json!({ "format": { "size": "1073741824" } });
+        assert_eq!(parse_format_size(&string_form), Some(1_073_741_824));
+        let number_form = serde_json::json!({ "format": { "size": 2048 } });
+        assert_eq!(parse_format_size(&number_form), Some(2048));
+        // 0 / 负数 / 非数字 / 缺字段 → None（保持原 file_size 不动）
+        let zero = serde_json::json!({ "format": { "size": "0" } });
+        assert_eq!(parse_format_size(&zero), None);
+        let negative = serde_json::json!({ "format": { "size": "-1" } });
+        assert_eq!(parse_format_size(&negative), None);
+        let garbage = serde_json::json!({ "format": { "size": "N/A" } });
+        assert_eq!(parse_format_size(&garbage), None);
+        let missing = serde_json::json!({ "format": { "duration": "10" } });
+        assert_eq!(parse_format_size(&missing), None);
     }
 }
