@@ -8,7 +8,16 @@ Emby 兼容媒体服务器（Rust 实现）。目标：让 Emby 客户端（Infu
 
 ### 获取镜像
 
-**方式一：从 Release 下载镜像包加载**（无需编译，推荐）
+**方式一：从 DockerHub 拉取**（最简单，无需编译）
+
+正式 Release 会自动推送到 DockerHub，`:latest` 始终指向最新版，也可按版本号拉取：
+
+```bash
+docker pull kuronekoko/emrs:latest
+docker pull kuronekoko/emrs:0.1.4   # 指定版本（去掉 tag 的 v 前缀）
+```
+
+**方式二：从 Release 下载镜像包加载**（无需编译，无法访问 DockerHub 时用）
 
 发布 Release 会附带 `emrs-<tag>-docker.tar.gz`，加载后即可运行：
 
@@ -17,7 +26,7 @@ docker load < emrs-v0.1.0-docker.tar.gz
 docker images | grep emrs
 ```
 
-**方式二：本地构建**
+**方式三：本地构建**
 
 ```bash
 docker build -t emrs:local .
@@ -32,7 +41,7 @@ docker run -d \
   -p 8086:8086 \
   -v emrs-data:/emrs \
   --restart unless-stopped \
-  emrs:local
+  kuronekoko/emrs:latest
 ```
 
 挂载本地目录也可以（便于直接改配置）：
@@ -43,7 +52,7 @@ docker run -d \
   -p 8086:8086 \
   -v "$PWD/emrs-docker:/emrs" \
   --restart unless-stopped \
-  emrs:local
+  kuronekoko/emrs:latest
 ```
 
 挂载媒体库（扫描入库需要容器内可访问媒体路径）：
@@ -55,7 +64,7 @@ docker run -d \
   -v emrs-data:/emrs \
   -v /path/to/media:/media:ro \
   --restart unless-stopped \
-  emrs:local
+  kuronekoko/emrs:latest
 ```
 
 之后在后台管理接口创建媒体库时，路径填容器内的 `/media/...`。
@@ -65,7 +74,7 @@ docker run -d \
 ```yaml
 services:
   emrs:
-    image: emrs:local        # 或改成加载后的 emrs:v0.1.0
+    image: kuronekoko/emrs:latest   # 或本地构建的 emrs:local / 加载后的 emrs:v0.1.0
     container_name: emrs
     ports:
       - "8086:8086"
