@@ -67,9 +67,7 @@ async fn test_state() -> AppState {
             db.clone(),
             Arc::new(cfg),
         )),
-        proxy: Arc::new(emrs_core::playback::proxy::ProxyClient::new(
-            emrs_core::playback::proxy::ProxyConfig::default(),
-        )),
+        http: Arc::new(emrs_core::http_client::HttpClient::none()),
         jobs: Arc::new(emrs_core::job::JobManager::new()),
         watcher: Arc::new(emrs_core::watcher::LibraryWatcher::new(db.clone())),
         block_cache: Arc::new(emrs_core::playback::block_cache::BlockCache::new(

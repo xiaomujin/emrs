@@ -1,4 +1,8 @@
-//! 统一出网模块：自定义 DNS（hosts）覆盖 + HTTP 代理，供 TMDB 刮削器与图片代理共用。
+//! 统一出网模块：自定义 DNS（hosts）覆盖 + HTTP 代理 + 共享 HTTP 客户端。
+//!
+//! - [`Outbound`]：出网**配置**（代理 + hosts 覆盖），启动时构建一次、`Arc` 共享。
+//! - [`HttpClient`]：唯一的出网**客户端**封装，套 [`Outbound`] 构建 reqwest client，
+//!   对外提供 `get_json` / `get_text` / `get_bytes` / `post_json` 通用方法，全项目共用同一封装。
 //!
 //! 背景：TMDB 域名（`api.themoviedb.org` / `image.tmdb.org`）在国内常被墙。除 HTTP 代理
 //! （`http.proxy_url`）外，另提供一条 hosts 覆盖路线——从可配置 URL 拉一份标准 hosts 文件，
@@ -15,7 +19,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use reqwest::ClientBuilder;
-use reqwest::header::HeaderName;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use serde::de::DeserializeOwned;
 
 use crate::config::HttpConfig;
 
@@ -82,6 +87,149 @@ impl Outbound {
             );
         }
         builder
+    }
+}
+
+/// 全项目共用的出网 HTTP 客户端：由 [`Outbound`] 构建单个 reqwest client（连接池复用），
+/// 对外封装 `get_json` / `get_text` / `get_bytes` / `post_json`。需要逐请求自定义鉴权/参数/限速的
+/// 调用方（如 TMDB）通过 [`HttpClient::inner`] 取底层 client 自行构建请求。
+pub struct HttpClient {
+    client: reqwest::Client,
+}
+
+/// 图片下载请求级总超时（防上游接受连接后挂起拖死 worker）。
+const IMAGE_TIMEOUT: Duration = Duration::from_secs(30);
+
+impl HttpClient {
+    /// 通用客户端（图片代理等）：套 [`Outbound`] + UA + connect_timeout 10s。
+    pub fn new(outbound: &Outbound) -> Self {
+        Self::build(
+            outbound,
+            "emrs/0.1",
+            Some(Duration::from_secs(10)),
+            None,
+            None,
+        )
+    }
+
+    /// TMDB 专用：套 [`Outbound`] + 默认头 `Accept: application/json` + 总超时 15s。
+    pub fn tmdb(outbound: &Outbound) -> Self {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("accept"),
+            HeaderValue::from_static("application/json"),
+        );
+        Self::build(
+            outbound,
+            "emrs/0.1",
+            None,
+            Some(Duration::from_secs(15)),
+            Some(headers),
+        )
+    }
+
+    /// 测试 / 默认客户端（无代理、无 hosts）。
+    pub fn none() -> Self {
+        Self::new(&Outbound::default())
+    }
+
+    fn build(
+        outbound: &Outbound,
+        user_agent: &str,
+        connect_timeout: Option<Duration>,
+        timeout: Option<Duration>,
+        default_headers: Option<HeaderMap>,
+    ) -> Self {
+        let mut builder = ClientBuilder::new().user_agent(user_agent);
+        if let Some(t) = connect_timeout {
+            builder = builder.connect_timeout(t);
+        }
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
+        if let Some(h) = default_headers {
+            builder = builder.default_headers(h);
+        }
+        // 代理 + hosts 覆盖统一由 Outbound 套用。
+        builder = outbound.configure(builder);
+        // 启动期单例构建：TLS 后端初始化失败属致命配置错误，直接 panic 而非
+        // 静默回退默认 client（会丢失 timeout / proxy / UA 配置）。
+        let client = builder
+            .build()
+            .expect("构建 reqwest client 失败（TLS 后端初始化异常）");
+        Self { client }
+    }
+
+    /// 底层 reqwest client（供需要逐请求自定义鉴权/查询/限速的调用方使用）。
+    pub fn inner(&self) -> &reqwest::Client {
+        &self.client
+    }
+
+    /// GET 并反序列化 JSON。非 2xx 报错并附响应体片段。
+    pub async fn get_json<T: DeserializeOwned>(&self, url: &str, timeout: Duration) -> Result<T> {
+        let resp = self.client.get(url).timeout(timeout).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            let snippet: String = body.chars().take(256).collect();
+            anyhow::bail!("HTTP {status}: {snippet}");
+        }
+        Ok(resp.json::<T>().await?)
+    }
+
+    /// GET 取文本。非 2xx 报错。
+    pub async fn get_text(&self, url: &str, timeout: Duration) -> Result<String> {
+        let resp = self.client.get(url).timeout(timeout).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("HTTP {status} for {url}");
+        }
+        Ok(resp.text().await?)
+    }
+
+    /// GET 取字节流（图片下载等）。返回 (字节, Content-Type)；非 2xx 视为失败。
+    pub async fn get_bytes(&self, url: &str, timeout: Duration) -> Result<(Vec<u8>, String)> {
+        let resp = self.client.get(url).timeout(timeout).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("下载失败: {status} for {url}");
+        }
+        let content_type = resp
+            .headers()
+            .get(HeaderName::from_static("content-type"))
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        let bytes = resp.bytes().await?.to_vec();
+        Ok((bytes, content_type))
+    }
+
+    /// POST JSON body 并反序列化响应 JSON。非 2xx 报错并附响应体片段。
+    pub async fn post_json<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<T> {
+        let resp = self
+            .client
+            .post(url)
+            .timeout(timeout)
+            .json(body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            let snippet: String = body.chars().take(256).collect();
+            anyhow::bail!("HTTP {status}: {snippet}");
+        }
+        Ok(resp.json::<T>().await?)
+    }
+
+    /// 下载图片（`/Items/{id}/Images` 代理返回）。固定 30s 请求级超时。
+    pub async fn fetch_image(&self, url: &str) -> Result<(Vec<u8>, String)> {
+        self.get_bytes(url, IMAGE_TIMEOUT).await
     }
 }
 

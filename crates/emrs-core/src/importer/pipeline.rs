@@ -9,7 +9,7 @@
 //! - Probe 消费 `media_source(status='pending', protocol='file')`：ffprobe 回填 → ok/failed
 //! - Scrape 消费 `item(scrape_status='pending')`：TMDB 匹配/按 ID 快路径 → scraped/none/retry
 //!
-//! 图片不落盘：`/Items/{id}/Images/{type}` 路由经 ProxyClient 代理上游 URL 返回。
+//! 图片不落盘：`/Items/{id}/Images/{type}` 路由经 HttpClient 代理上游 URL 返回。
 
 use std::path::PathBuf;
 use std::sync::Arc;

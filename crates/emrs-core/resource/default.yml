@@ -75,7 +75,7 @@ pipeline:
   # 刮削失败最大尝试次数，超过转 failed 终态；网络/API 异常按 attempts 重试
   scrape_retry_max_attempts: 5
   # TMDB 全局限速（次/秒，进程级共享；0 不限速）
-  scrape_rate_limit_per_sec: 3
+  scrape_rate_limit_per_sec: 20
   # 删除检测兜底间隔（秒）；每次扫描完成后必触发一次
   delete_check_interval_secs: 3600
   # —— sqlite 写库节流（仅 WAL 生效；大库首扫时避免扫描/探测长时间独占写锁饿死认证/读）——

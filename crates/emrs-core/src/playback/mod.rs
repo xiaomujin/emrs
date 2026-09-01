@@ -5,7 +5,6 @@
 //! - `TicketBackend`：短票据（jwt）自校验播放
 
 pub mod block_cache;
-pub mod proxy;
 pub mod redirect;
 pub mod ticket;
 

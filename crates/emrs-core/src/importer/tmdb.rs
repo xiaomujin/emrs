@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::http_client::Outbound;
+use crate::http_client::{HttpClient, Outbound};
 
 /// TMDB 配置。
 #[derive(Debug, Clone)]
@@ -42,7 +42,7 @@ static LAST_TMDB_REQUEST: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mut
 
 /// TMDB 刮削器。
 pub struct TmdbScraper {
-    client: reqwest::Client,
+    http: HttpClient,
     config: TmdbConfig,
     /// 两次请求的最小间隔（None = 不限速）。
     interval: Option<Duration>,
@@ -407,20 +407,10 @@ impl TmdbScraper {
             .then(|| Duration::from_secs_f64(1.0 / config.requests_per_second as f64));
         // v4 token 以 `eyJ` 开头且足够长
         let use_bearer = config.api_key.starts_with("eyJ") && config.api_key.len() > 40;
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::ACCEPT,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
-        let builder = reqwest::Client::builder()
-            .user_agent("emrs/0.1")
-            .default_headers(headers)
-            .timeout(Duration::from_secs(15));
-        // 代理 + hosts 覆盖统一由 Outbound 套用（见 http_client.rs）。
-        let builder = config.outbound.configure(builder);
-        let client = builder.build().unwrap_or_default();
+        // UA / Accept:json / 15s 超时 / 代理 + hosts 由 HttpClient::tmdb 统一封装。
+        let http = HttpClient::tmdb(&config.outbound);
         Self {
-            client,
+            http,
             config,
             interval,
             use_bearer,
@@ -603,7 +593,10 @@ impl TmdbScraper {
     ) -> Result<T> {
         self.throttle().await;
 
-        let mut req = self.client.get(format!("{}/{path}", self.config.base_url));
+        let mut req = self
+            .http
+            .inner()
+            .get(format!("{}/{path}", self.config.base_url));
         if self.use_bearer {
             req = req.bearer_auth(&self.config.api_key);
         } else {

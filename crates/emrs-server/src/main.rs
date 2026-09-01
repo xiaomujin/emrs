@@ -97,12 +97,7 @@ async fn main() -> Result<()> {
     // 统一出网配置：启动时加载一次 hosts（远程/文件/内联合并）+ 代理，供 TMDB 刮削与图片代理共用。
     let outbound = emrs_core::http_client::Outbound::from_config(&cfg.http).await;
 
-    let proxy = Arc::new(emrs_core::playback::proxy::ProxyClient::new(
-        emrs_core::playback::proxy::ProxyConfig {
-            outbound: outbound.clone(),
-            ..Default::default()
-        },
-    ));
+    let http = Arc::new(emrs_core::http_client::HttpClient::new(&outbound));
 
     let jobs = Arc::new(emrs_core::job::JobManager::new());
     // 元数据分离：watch 只入队 scan_job，需持有流水线引用做即时唤醒，先建后绑
@@ -140,7 +135,7 @@ async fn main() -> Result<()> {
         cache,
         cfg: cfg.clone(),
         drivers,
-        proxy,
+        http,
         jobs,
         watcher,
         block_cache,

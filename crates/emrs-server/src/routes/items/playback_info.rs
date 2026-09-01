@@ -300,7 +300,7 @@ async fn proxy_image(st: &AppState, url: Option<String>, q: ResizeQuery) -> Resp
     let Some(url) = url.filter(|u| !u.is_empty()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    match st.proxy.fetch_image(&url).await {
+    match st.http.fetch_image(&url).await {
         Ok((bytes, content_type)) => {
             // 有缩放参数才处理；否则原样转发
             let needs_resize = q.maxwidth.is_some() || q.maxheight.is_some();
