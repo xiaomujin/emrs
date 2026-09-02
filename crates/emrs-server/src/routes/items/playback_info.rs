@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::emby::{IdKind, PlaybackInfoResponseDto, media_sources_json};
 use emrs_core::auth::AuthContext;
@@ -146,7 +146,9 @@ fn spawn_strm_probe(st: &AppState, media: &MediaSourceRow) {
     });
 }
 
-/// GET /Items/{id}/Images/{image_path}：图片代理（下载上游 URL 并返回，Hills 等客户端展示用）。
+/// GET /Items/{id}/Images/{image_path}：图片端点。默认（`http.image_proxy = false`）
+/// 301 重定向到图片原始 URL，客户端直连上游省本机带宽；
+/// 开启 `http.image_proxy` 后改为本机下载上游并返回。
 /// 注册在公开组（匿名可访问）；Season/Episode 无自有图片时回退到上级剧集海报。
 ///
 /// `{id}` 命名空间按类型前缀分流：`i-{id}`/裸数字 = item.id（movie/series/season/episode）；
@@ -166,36 +168,6 @@ pub(crate) async fn item_image(
         return proxy_image(&st, Some(url), q).await;
     }
     StatusCode::NOT_FOUND.into_response()
-
-    // // 归一化 image_type：取首段（去掉 /0 索引），再剥扩展名（Primary.jpg → Primary）
-    // let image_type = normalize_image_type(&image_path);
-    // // `/0` 索引（Backdrop 第 N 张，0 起）
-    // let index = normalize_image_index(&image_path);
-    // // 支持 Primary / Backdrop / Logo / Thumb；其他类型暂未入库
-    // if !matches!(
-    //     image_type.to_ascii_lowercase().as_str(),
-    //     "primary" | "backdrop" | "logo" | "thumb"
-    // ) {
-    //     return StatusCode::NOT_FOUND.into_response();
-    // }
-    //
-    // // 命名空间分流：p-{id} → people（演员头像）；i-{id}/裸数字 → item；其余 404
-    // match crate::emby::parse_id(&id) {
-    //     Some((IdKind::People, rid)) => {
-    //         let url = find_image_url(&st, "people", rid, image_type, index).await;
-    //         proxy_image(&st, url, q).await
-    //     }
-    //     Some((IdKind::Item, rid)) => {
-    //         let ty = ItemsStore::get_item_type(&st.db, rid)
-    //             .await
-    //             .ok()
-    //             .flatten()
-    //             .unwrap_or_default();
-    //         let url = resolve_image_url(&st, &ty, rid, image_type, index).await;
-    //         proxy_image(&st, url, q).await
-    //     }
-    //     _ => StatusCode::NOT_FOUND.into_response(),
-    // }
 }
 
 /// 图片缩放 query 参数（宽松解析，Emby 客户端带 maxWidth/maxHeight/quality/tag）。
@@ -293,13 +265,18 @@ async fn resolve_by_tag(st: &AppState, tag: Option<&str>) -> Option<String> {
 //     find_image_url(st, "item", rid, image_type, index).await
 // }
 
-/// 下载图片字节（上游 image.tmdb.org 等）并返回；URL 为空返回 404。
+/// 返回图片：`http.image_proxy = false`（默认）301 重定向到原始 URL；
+/// 开启时下载字节流并返回。URL 为空返回 404。
 /// `q.maxwidth`/`q.maxheight` 非空时按比例缩放后重新编码（jpg/webp），
 /// `q.quality` 控制 JPEG 质量（1-100，默认 90）。
+/// 注意：缩放发生在本机，仅代理模式生效；重定向模式下 query 参数被忽略。
 async fn proxy_image(st: &AppState, url: Option<String>, q: ResizeQuery) -> Response {
     let Some(url) = url.filter(|u| !u.is_empty()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if !st.cfg.http.image_proxy {
+        return Redirect::permanent(&url).into_response();
+    }
     match st.http.fetch_image(&url).await {
         Ok((bytes, content_type)) => {
             // 有缩放参数才处理；否则原样转发

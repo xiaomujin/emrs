@@ -59,6 +59,11 @@ http:
   # hosts_inline:
   #   - "3.170.19.19 api.tmdb.org"
   #   - "143.244.60.195 image.tmdb.org"
+  # 是否本机代理获取图片（/Items/{id}/Images）。
+  # false（默认）：301 重定向到图片原始 URL，客户端直连上游，省本机带宽；
+  #   重定向模式下 maxWidth/maxHeight/quality 缩放参数不生效。
+  # true：本机下载后返回（客户端访问不了图源、或需要缩放时开启，可配合上面 proxy/hosts）。
+  image_proxy: false
 
 # 四阶段流水线（Scan → Probe → Scrape 后台轮询）：
 #   Scan 落物理事实 → Probe 消费 media_source(status='pending') 回填流信息

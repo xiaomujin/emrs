@@ -138,6 +138,10 @@ pub struct HttpConfig {
     pub hosts_file: Option<String>,
     /// 内联 hosts 行（每行 `IP host`），优先级最高——同名 host 覆盖远程/文件。
     pub hosts_inline: Vec<String>,
+    /// 是否本机代理获取图片（`/Items/{id}/Images`），默认 false。
+    /// false：301 重定向到图片原始 URL，客户端直连上游，省本机带宽；
+    /// true：本机下载后返回字节流（支持 maxWidth/maxHeight/quality 缩放，客户端访问不了图源时开启）。
+    pub image_proxy: bool,
 }
 
 /// 四阶段流水线配置。
@@ -203,6 +207,7 @@ impl Default for HttpConfig {
             hosts_url: Some("https://gh-proxy.com/https://raw.githubusercontent.com/cnwikee/CheckTMDB/refs/heads/main/Tmdb_host_ipv4".into()),
             hosts_file: Some("data/tmdb_hosts.txt".into()),
             hosts_inline: vec![],
+            image_proxy: false,
         }
     }
 }
