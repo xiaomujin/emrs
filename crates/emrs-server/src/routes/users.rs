@@ -1,6 +1,11 @@
-//! 公开发现层（无需认证）：System/Info/Public、Ping、Users/Public、/web stub、AuthenticateByName。
+//! Users 域：`/Users` 命名空间下的发现、登录与用户查询。
 //!
-//! 响应字段逐条对齐 Emby 协议。
+//! - [`public`]：`/Users/Public`（空列表，不暴露用户名）、`/Users/AuthenticateByName`（登录签发 token）。
+//! - [`authenticated`]：`/Users/Me`（当前用户）、`/Users/{user_id}`、`/Users`（用户枚举不开放，返回空）。
+//!
+//! 客户端发现与登录入口集中于此；`/Users/{uid}/Items*` 等用户视图端点属 Items 域。
+
+use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{Path, Request, State};
@@ -8,72 +13,30 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::Value;
-use std::time::Duration;
 
 use emrs_core::auth::{AuthStore, random_token};
-use emrs_core::cloud::CloudRef;
-use emrs_core::playback::{PlayRequest, PlaybackRouter, ticket};
 
 use crate::middleware::device_from_parts;
-use crate::routes::user_dto;
 use crate::state::AppState;
 
-/// 公开组路由（不走 authGuard）。
-pub fn public_routes() -> Router<AppState> {
+/// 公开组：Users/Public + AuthenticateByName（登录不走 authGuard）。
+pub fn public() -> Router<AppState> {
     Router::new()
-        .route("/System/Info/Public", get(info_public))
-        .route("/System/Ping", get(ping).head(ping))
         .route("/Users/Public", get(users_public))
         .route("/Users/AuthenticateByName", post(authenticate_by_name))
-        .route("/s/{ticket}", get(ticket_play))
-        // 图片端点匿名可访问（客户端 <img> 请求不带 token）
-        // `{*image_path}` 通配：兼容 Primary / Primary/0 / primary.jpg / Primary/0.jpg
-        .route(
-            "/Items/{id}/Images/{*image_path}",
-            get(super::items::item_image),
-        )
-        // Admin 登录（公开）
-        .route("/admin/login", post(super::admin::admin_login))
 }
 
-/// 根级路由（不参与三重前缀）：/ 重定向 /web，/web stub，/admin 管理页。
-pub fn root_routes() -> Router<AppState> {
+/// 认证组：Users/Me + Users/{id} + Users。
+pub fn authenticated() -> Router<AppState> {
     Router::new()
-        .route("/", get(|| async { axum::response::Redirect::to("/web") }))
-        .route("/web", get(web_stub))
-        .route("/web/", get(web_stub))
-        .route("/web/index.html", get(web_stub))
-        // 管理后台（单文件 HTML，登录后调用 /admin/* API）
-        .route("/admin", get(admin_page))
-        .route("/admin/", get(admin_page))
-        .route("/admin/index.html", get(admin_page))
+        .route("/Users/Me", get(users_me))
+        .route("/Users/{user_id}", get(user_by_id))
+        .route("/Users", get(users_list))
 }
 
-/// GET /admin：管理后台单文件页面（编译期内联自 assets/admin.html）。
-async fn admin_page() -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        include_str!("../../assets/admin.html"),
-    )
-}
-
-/// GET /System/Info/Public：匿名探测（Infuse/Senplayer 发现第一跳）。
-async fn info_public(State(state): State<AppState>) -> impl IntoResponse {
-    axum::Json(crate::emby::SystemInfoPublicDto::new(
-        &state.cfg.emby.server_name,
-        &state.cfg.emby.server_id,
-    ))
-}
-
-/// GET|HEAD /System/Ping：文本应答。
-async fn ping() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        "emrs Server",
-    )
+/// Emby User DTO。
+pub fn user_dto(state: &AppState, u: &emrs_core::auth::UserRow) -> crate::emby::UserDto {
+    crate::emby::user_to_json(&state.cfg.emby.server_id, u)
 }
 
 /// GET /Users/Public：空列表（不暴露用户名）。
@@ -81,23 +44,28 @@ async fn users_public() -> impl IntoResponse {
     axum::Json(Vec::<serde_json::Value>::new())
 }
 
-/// GET /web：HTML stub（客户端判定"这是 Emby 服务器"的特征路径）。
-async fn web_stub() -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        r#"<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><title>emrs</title>
-<meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;font-family:Segoe UI,Roboto,sans-serif;background:#101828;color:#e6e9ef;min-height:100vh;display:flex;align-items:center;justify-content:center">
-<div style="max-width:520px;padding:32px;background:#1d2435;border-radius:12px">
-<h1 style="margin:0 0 12px;font-size:20px">emrs</h1>
-<p style="color:#aab2c5;line-height:1.5">Emby 兼容媒体服务器（Rust）。请使用 Emby / Infuse 等客户端连接本地址。</p>
-</div></body></html>"#,
-    )
+/// GET /Users：空列表（Emby 兼容：用户枚举不开放）。
+async fn users_list() -> impl IntoResponse {
+    axum::Json(Vec::<serde_json::Value>::new())
+}
+
+/// GET /Users/{user_id}：按 id 取用户。
+async fn user_by_id(Path(user_id): Path<i64>, State(state): State<AppState>) -> impl IntoResponse {
+    match AuthStore::find_user_by_id(&state.db, user_id).await {
+        Ok(Some(u)) => axum::Json(user_dto(&state, &u)).into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// GET /Users/Me（认证组挂载；从 extensions 取 AuthContext）。
+async fn users_me(
+    axum::Extension(ctx): axum::Extension<emrs_core::auth::AuthContext>,
+    State(state): State<AppState>,
+) -> Response {
+    match AuthStore::find_user_by_id(&state.db, ctx.user_id).await {
+        Ok(Some(u)) => axum::Json(user_dto(&state, &u)).into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// 登录失败限流（内存缓存；窗口 10 分钟 10 次）。
@@ -318,103 +286,6 @@ async fn authenticate_by_name(State(state): State<AppState>, req: Request) -> Re
         server_id: state.cfg.emby.server_id.clone(),
     })
     .into_response()
-}
-
-/// GET /Users/Me（认证组挂载；从 extensions 取 AuthContext）。
-pub async fn users_me(
-    axum::Extension(ctx): axum::Extension<emrs_core::auth::AuthContext>,
-    State(state): State<AppState>,
-) -> Response {
-    match AuthStore::find_user_by_id(&state.db, ctx.user_id).await {
-        Ok(Some(u)) => axum::Json(user_dto(&state, &u)).into_response(),
-        _ => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-/// GET /s/{ticket}：短票据播放（自校验 JWT，无需认证头）。
-async fn ticket_play(
-    State(st): State<AppState>,
-    Path(ticket): Path<String>,
-    req: Request,
-) -> Response {
-    // 1. 验证票据
-    let key = match &st.cfg.playback.signing_key {
-        Some(k) => k.as_bytes().to_vec(),
-        None => {
-            tracing::warn!("ticket_play: signing_key not configured");
-            return StatusCode::FORBIDDEN.into_response();
-        }
-    };
-    let claims = match ticket::verify_ticket(&ticket, &key) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "ticket_play: invalid ticket");
-            return StatusCode::FORBIDDEN.into_response();
-        }
-    };
-    let range = req
-        .headers()
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    // 2. 查媒体
-    let media = sqlx::query_as::<_, (i64, Option<String>, Option<String>)>(
-        "SELECT id, COALESCE(path, remote_path) AS path_url, \
-                CASE protocol WHEN 'file' THEN 'local' WHEN 'strm' THEN 'strm' ELSE protocol END AS path_type \
-         FROM media_source \
-         WHERE uuid = ? LIMIT 1",
-    )
-    .bind(&claims.uuid)
-    .fetch_optional(st.db.pool())
-    .await;
-
-    match media {
-        Ok(Some((_id, Some(url), Some(typ)))) if typ == "local" => {
-            // 本地视频源：Range 流式服务（206/200）
-            super::items::serve_local_file(&url, range.as_deref()).await
-        }
-        Ok(Some((_media_id, Some(url), Some(typ)))) => {
-            let cloud_ref = CloudRef {
-                path_type: typ,
-                path_url: url,
-            };
-            let req = PlayRequest {
-                cloud_ref,
-                user_id: claims.user_id,
-                device_id: None,
-            };
-            let router = PlaybackRouter::new(st.drivers.clone(), st.cache.clone());
-            match router.resolve_direct(&req).await {
-                Ok(Some(direct_url)) => {
-                    axum::response::Redirect::temporary(&direct_url).into_response()
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        uuid = claims.uuid,
-                        "ticket_play: driver returned no direct url"
-                    );
-                    StatusCode::NOT_FOUND.into_response()
-                }
-                Err(e) => {
-                    tracing::error!(uuid = claims.uuid, error = %e, "ticket_play: resolve failed");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
-            }
-        }
-        Ok(Some((_, Some(url), None))) => {
-            // path_type 为 NULL：按 http 直链 302
-            axum::response::Redirect::temporary(&url).into_response()
-        }
-        Ok(Some((_, None, _))) | Ok(None) => {
-            tracing::warn!(uuid = claims.uuid, "ticket_play: media not found");
-            StatusCode::NOT_FOUND.into_response()
-        }
-        Err(e) => {
-            tracing::error!(uuid = claims.uuid, error = %e, "ticket_play: db error");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
 }
 
 fn text(status: StatusCode, body: &str) -> Response {

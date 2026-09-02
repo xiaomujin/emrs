@@ -1,36 +1,39 @@
-//! Admin 仪表盘路由：登录 + 库管理 + 媒体管理 + 扫描/监听 job。
+//! Admin 仪表盘域：登录 + 管理 API + 后台页面，跨三个 zone。
 //!
-//! - 登录端点 `/admin/login` 不走 authGuard（签发 admin_session token）。
-//! - 其余端点挂载在 `authenticated_routes()` 内，依赖 authGuard 做管理员认证。
+//! - [`public`]：`POST /admin/login`（不走 authGuard，签发 admin_session token）。
+//! - [`authenticated`]：`/admin/*` 管理 API，依赖 authGuard 做管理员认证。
+//! - [`root`]：`/admin` 后台页面（单文件 HTML，不参与三重前缀，登录后调用管理 API）。
 //!
-//! 模块拆分：
+//! handler 实现按子域拆分：
 //! - [`libraries`]：库 CRUD + 媒体列表 + 人工裁决/手动识别
 //! - [`jobs`]：扫描 / 刮削 / 探测 / 监听 job
 //! - [`settings`]：app_setting 读写
+//! - [`login`]：管理员登录
 
 use axum::Router;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::http::header;
+use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
-use serde::Deserialize;
-use serde_json::json;
-
-use emrs_core::auth::{random_token, verify_password};
 
 use crate::state::AppState;
 
 mod jobs;
 mod libraries;
+mod login;
 mod settings;
 
-// handler 实现按域拆分到子模块，这里按域 glob 引入供 admin_routes 注册。
+// handler 实现按域拆分到子模块，这里按域 glob 引入供路由注册。
 use jobs::*;
 use libraries::*;
 use settings::*;
 
-/// Admin 路由组。
-pub fn admin_routes() -> Router<AppState> {
+/// 公开组：管理员登录。
+pub fn public() -> Router<AppState> {
+    Router::new().route("/admin/login", post(login::admin_login))
+}
+
+/// 认证组：Admin 管理 API（挂载于 authGuard 内）。
+pub fn authenticated() -> Router<AppState> {
     Router::new()
         // 库管理
         .route("/admin/libraries", get(list_libraries).post(create_library))
@@ -65,79 +68,21 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/admin/settings", put(set_setting))
 }
 
-// ---------------------------------------------------------------------------
-// Admin 登录
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-pub(crate) struct AdminLoginReq {
-    pub(crate) username: String,
-    pub(crate) password: String,
+/// 根级（不参与三重前缀）：管理后台页面。
+pub fn root() -> Router<AppState> {
+    Router::new()
+        .route("/admin", get(admin_page))
+        .route("/admin/", get(admin_page))
+        .route("/admin/index.html", get(admin_page))
 }
 
-/// POST /admin/login：管理员登录，签发 auth_token(kind=admin)。
-pub(crate) async fn admin_login(
-    State(st): State<AppState>,
-    axum::extract::Json(body): axum::extract::Json<AdminLoginReq>,
-) -> Response {
-    if body.username.is_empty() || body.password.is_empty() {
-        return (StatusCode::BAD_REQUEST, "用户名和密码不能为空").into_response();
-    }
-
-    // 查 user 表（role=admin）
-    match emrs_core::auth::AuthStore::find_user(&st.db, &body.username).await {
-        Ok(Some(user)) if user.is_admin => {
-            if !verify_password(&user.password_hash, &body.password) {
-                let _ = emrs_core::auth::AuthStore::log_login_event(
-                    &st.db,
-                    &emrs_core::auth::LoginEvent {
-                        user_id: Some(user.id),
-                        username: body.username.clone(),
-                        login_type: "admin".to_string(),
-                        success: false,
-                        reason: "password mismatch".to_string(),
-                        ..Default::default()
-                    },
-                )
-                .await;
-                return (StatusCode::UNAUTHORIZED, "用户名或密码错误").into_response();
-            }
-            // 签发 admin auth_token
-            let token = random_token(16);
-            let device = emrs_core::auth::DeviceInfo::default();
-            if let Err(e) =
-                emrs_core::auth::AuthStore::insert_token(&st.db, &token, user.id, "admin", &device)
-                    .await
-            {
-                tracing::error!(error = %e, "admin login: insert token failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-            let _ = emrs_core::auth::AuthStore::touch_last_login(&st.db, user.id).await;
-            let _ = emrs_core::auth::AuthStore::log_login_event(
-                &st.db,
-                &emrs_core::auth::LoginEvent {
-                    user_id: Some(user.id),
-                    username: body.username.clone(),
-                    login_type: "admin".to_string(),
-                    success: true,
-                    ..Default::default()
-                },
-            )
-            .await;
-            axum::Json(json!({
-                "token": token,
-                "username": body.username,
-            }))
-            .into_response()
-        }
-        Ok(Some(_)) => {
-            // 非 admin 用户试图登录管理面板
-            (StatusCode::UNAUTHORIZED, "无管理员权限").into_response()
-        }
-        Ok(None) => (StatusCode::UNAUTHORIZED, "用户名或密码错误").into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "admin login: db error");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+/// GET /admin：管理后台单文件页面（编译期内联自 assets/admin.html）。
+async fn admin_page() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        include_str!("../../../assets/admin.html"),
+    )
 }

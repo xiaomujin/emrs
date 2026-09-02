@@ -1,18 +1,99 @@
-//! 播放会话进度上报端点：/Sessions/Playing / Progress / Stopped。
+//! Sessions 域：`/Sessions` 命名空间统一归口。
+//!
+//! - `GET /Sessions`：当前用户进行中播放会话（EMRS 无客户端会话注册表，从 user_item_data 派生）。
+//! - `POST /Sessions/Capabilities[/Full]`、`/Sessions/Playing/Ping`：Emby 兼容空应答 stub。
+//! - `POST /Sessions/Playing`、`/Progress`、`/Stopped`：播放开始 / 进度 / 终态上报。
+//!
+//! 全部走认证 + Timeout（authed JSON API zone）；匿名兼容读（无 AuthContext）时 `GET /Sessions` 返回空列表。
 
+use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
 
 use emrs_core::auth::AuthContext;
 use emrs_core::stores::{ItemsStore, PlaybackStore};
 
+use crate::emby::SessionListEntryDto;
+use crate::routes::params::resolve_item_id;
 use crate::state::AppState;
 
-use super::resolve_item_id;
+/// 认证组：Sessions 列表 + 能力/Ping stub + 播放进度上报。
+pub fn authenticated() -> Router<AppState> {
+    Router::new()
+        // Sessions 列表（从 user_item_data 派生进行中会话）
+        .route("/Sessions", get(sessions))
+        // 能力/Ping stub：Emby 客户端上报兼容，空应答 204
+        .route("/Sessions/Capabilities/Full", post(no_content))
+        .route("/Sessions/Capabilities", post(no_content))
+        .route("/Sessions/Playing/Ping", post(no_content))
+        // 播放进度上报（真实实现）
+        .route("/Sessions/Playing", post(report_playing))
+        .route("/Sessions/Playing/Progress", post(report_progress))
+        .route("/Sessions/Playing/Stopped", post(report_stopped))
+}
+
+/// 204 空应答。
+async fn no_content() -> impl IntoResponse {
+    StatusCode::NO_CONTENT
+}
+
+/// GET /Sessions：当前用户的进行中播放会话（NowPlayingItem + PlaybackPositionTicks）。
+/// EMRS 无客户端会话注册表，从 user_item_data 派生"正在播放"条目作为会话列表。
+/// 匿名兼容读（GET/HEAD 无 token）时无 AuthContext，返回空列表。
+async fn sessions(
+    State(st): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
+) -> Response {
+    let Some(axum::Extension(ctx)) = ctx else {
+        return axum::Json(Vec::<SessionListEntryDto>::new()).into_response();
+    };
+    let items = match ItemsStore::list_active_sessions(&st.db, ctx.user_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "sessions query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    // 批量预取图片行 id，组装 NowPlayingItem DTO
+    let mut ids: Vec<i64> = Vec::with_capacity(items.len() * 2);
+    for i in &items {
+        ids.push(i.id);
+        if let Some(sid) = i.series_id {
+            ids.push(sid);
+        }
+    }
+    let flags = ItemsStore::image_ids_batch(&st.db, &ids)
+        .await
+        .unwrap_or_default();
+    let sessions: Vec<SessionListEntryDto> = items
+        .iter()
+        .map(|item| {
+            let now_playing_item = crate::emby::item_to_json(
+                &st.cfg.emby.server_id,
+                item,
+                &crate::emby::ItemImageFlags::from_batch(&flags, item),
+                None,
+                None,
+                None,
+            );
+            let user_id = ctx.user_id.to_string();
+            SessionListEntryDto::new(
+                now_playing_item,
+                format!("session-{}", item.id),
+                &user_id,
+                &ctx.username,
+                &ctx.device,
+                item.play_ms * 10_000,
+            )
+        })
+        .collect();
+    axum::Json(sessions).into_response()
+}
 
 /// POST /Sessions/Playing：开始播放（`play_count` +1，作为 Resume 标记）。
-pub(super) async fn report_playing(
+async fn report_playing(
     State(st): State<AppState>,
     axum::Extension(ctx): axum::Extension<AuthContext>,
     body: axum::body::Bytes,
@@ -47,7 +128,7 @@ fn item_id_from_body(body: &serde_json::Value) -> Option<String> {
 }
 
 /// POST /Sessions/Playing/Progress：播放进度。
-pub(super) async fn report_progress(
+async fn report_progress(
     State(st): State<AppState>,
     axum::Extension(ctx): axum::Extension<AuthContext>,
     body: axum::body::Bytes,
@@ -75,7 +156,7 @@ pub(super) async fn report_progress(
 }
 
 /// POST /Sessions/Playing/Stopped：停止播放（终态进度）。
-pub(super) async fn report_stopped(
+async fn report_stopped(
     State(st): State<AppState>,
     axum::Extension(ctx): axum::Extension<AuthContext>,
     body: axum::body::Bytes,

@@ -1,4 +1,10 @@
-//! 流式播放路由：本地 Range 服务 / HTTP 直链 302 / 字幕。
+//! 播放域：媒体取流入口。跨两个 zone——
+//!
+//! - [`public`]：`GET /s/{ticket}`（短票据播放，JWT 自校验，无需认证头）。
+//! - [`stream`]：`/Videos/{uuid}/{name}`（302 直链 / 本地 Range 长流）+ 字幕，认证但不加 Timeout。
+//!
+//! Timeout 不能覆盖流式端点（防长播被掐断），故 [`stream`] 由 [`crate::app`] 挂在 Timeout 之外。
+//! 本地文件 Range 服务 [`serve_local_file`] 为二者共用。
 
 use axum::Router;
 use axum::extract::{Path, Request, State};
@@ -9,12 +15,17 @@ use tokio::io::AsyncSeekExt;
 
 use emrs_core::auth::AuthContext;
 use emrs_core::cloud::CloudRef;
-use emrs_core::playback::{PlayRequest, PlaybackRouter};
+use emrs_core::playback::{PlayRequest, PlaybackRouter, ticket};
 
 use crate::state::AppState;
 
-/// 流式播放路由（认证但不加 Timeout，防长播被 30s 掐断；挂在 [`crate::app`] 的认证层内）。
-pub fn streaming_routes() -> Router<AppState> {
+/// 公开组：`/s/{ticket}` 短票据播放（票据自校验，不走 authGuard）。
+pub fn public() -> Router<AppState> {
+    Router::new().route("/s/{ticket}", get(ticket_play))
+}
+
+/// 流式组（认证但不加 Timeout，防长播被 30s 掐断；挂在 [`crate::app`] 的认证层内）。
+pub fn stream() -> Router<AppState> {
     Router::new()
         // 视频播放（本地 Range 服务 / http 直链 302）
         // `/Videos/{uuid}/{name}` 为 Emby 协议标准路径；小写 `/videos` 别名兼容
@@ -23,6 +34,92 @@ pub fn streaming_routes() -> Router<AppState> {
         .route("/videos/{uuid}/{name}", get(play_video).head(play_video))
         // 字幕
         .route("/Videos/{uuid}/Subtitles/{index}", get(play_subtitle))
+}
+
+/// GET /s/{ticket}：短票据播放（自校验 JWT，无需认证头）。
+async fn ticket_play(
+    State(st): State<AppState>,
+    Path(ticket_str): Path<String>,
+    req: Request,
+) -> Response {
+    // 1. 验证票据
+    let key = match &st.cfg.playback.signing_key {
+        Some(k) => k.as_bytes().to_vec(),
+        None => {
+            tracing::warn!("ticket_play: signing_key not configured");
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    };
+    let claims = match ticket::verify_ticket(&ticket_str, &key) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "ticket_play: invalid ticket");
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    };
+    let range = req
+        .headers()
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // 2. 查媒体
+    let media = sqlx::query_as::<_, (i64, Option<String>, Option<String>)>(
+        "SELECT id, COALESCE(path, remote_path) AS path_url, \
+                CASE protocol WHEN 'file' THEN 'local' WHEN 'strm' THEN 'strm' ELSE protocol END AS path_type \
+         FROM media_source \
+         WHERE uuid = ? LIMIT 1",
+    )
+    .bind(&claims.uuid)
+    .fetch_optional(st.db.pool())
+    .await;
+
+    match media {
+        Ok(Some((_id, Some(url), Some(typ)))) if typ == "local" => {
+            // 本地视频源：Range 流式服务（206/200）
+            serve_local_file(&url, range.as_deref()).await
+        }
+        Ok(Some((_media_id, Some(url), Some(typ)))) => {
+            let cloud_ref = CloudRef {
+                path_type: typ,
+                path_url: url,
+            };
+            let req = PlayRequest {
+                cloud_ref,
+                user_id: claims.user_id,
+                device_id: None,
+            };
+            let router = PlaybackRouter::new(st.drivers.clone(), st.cache.clone());
+            match router.resolve_direct(&req).await {
+                Ok(Some(direct_url)) => {
+                    axum::response::Redirect::temporary(&direct_url).into_response()
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        uuid = claims.uuid,
+                        "ticket_play: driver returned no direct url"
+                    );
+                    StatusCode::NOT_FOUND.into_response()
+                }
+                Err(e) => {
+                    tracing::error!(uuid = claims.uuid, error = %e, "ticket_play: resolve failed");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
+        }
+        Ok(Some((_, Some(url), None))) => {
+            // path_type 为 NULL：按 http 直链 302
+            axum::response::Redirect::temporary(&url).into_response()
+        }
+        Ok(Some((_, None, _))) | Ok(None) => {
+            tracing::warn!(uuid = claims.uuid, "ticket_play: media not found");
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => {
+            tracing::error!(uuid = claims.uuid, error = %e, "ticket_play: db error");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 /// GET|HEAD /Videos/{uuid}/{name}：视频播放。
