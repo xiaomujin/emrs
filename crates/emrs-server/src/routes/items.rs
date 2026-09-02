@@ -16,7 +16,7 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 use serde::de::{self, Visitor};
 
-use emrs_core::emby;
+use crate::emby;
 use emrs_core::stores::ItemsStore;
 
 use crate::state::AppState;

@@ -13,6 +13,7 @@ name = "emrs-server"
 path = "src/main.rs"
 
 [dependencies]
+emby-proto.workspace = true
 emrs-core.workspace = true
 tokio.workspace = true
 anyhow.workspace = true

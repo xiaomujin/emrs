@@ -1,8 +1,8 @@
 //! Emby 响应 DTO 共享 base：多接口复用的公共字段组，`#[serde(flatten)]` 注入父 struct。
 //!
 //! - [`ImageTagsDto`]：`ImageTags` 对象（Primary/Logo/Thumb，无则省略，全无则 `{}`）。
-//! - [`BaseItemDto`]：item-like 响应（[`super::dto::ItemDto`] /
-//!   [`super::latest::LatestItemJson`] / [`super::views::CollectionFolderView`]）
+//! - [`BaseItemDto`]：item-like 响应（`ItemDto` /
+//!   `LatestItemJson` / `CollectionFolderView`）
 //!   共有的 11 个顶层字段，flatten 后直接出现在父对象顶层。
 //!
 //! 字段全 non-Option：避免 `flatten` × `skip_serializing_if` 交互；各子 struct 的
@@ -10,7 +10,7 @@
 
 use serde::Serialize;
 
-use super::views::ViewsUserData;
+use crate::ViewsUserData;
 
 /// Emby `ImageTags` 对象。承载 Primary / Logo / Thumb / Banner（各自无则省略，全无则 `{}`）。
 #[derive(Serialize, Default, Clone)]
@@ -28,8 +28,8 @@ pub struct ImageTagsDto {
 
 /// item-like 响应共有的 11 个顶层字段。
 ///
-/// `#[serde(flatten)]` 进 [`super::dto::ItemDto`] / [`super::latest::LatestItemJson`] /
-/// [`super::views::CollectionFolderView`]；序列化时这些字段直接出现在父对象顶层，
+/// `#[serde(flatten)]` 进 `ItemDto` / `LatestItemJson` /
+/// `CollectionFolderView`；序列化时这些字段直接出现在父对象顶层，
 /// 与旧手写字段等价（键名/形状不变）。`item_type` 经 `rename="Type"` 输出 `Type`。
 ///
 /// `Default`：除 `is_folder=false`/`item_type=""` 外全空/零；库视图等需在自身
@@ -53,7 +53,7 @@ pub struct BaseItemDto {
 
 /// `{Name, Id}` 两字段身份 base。
 ///
-/// [`super::dto::GenreItemDto`] / [`super::dto::StudioDto`]（item 子对象）与
+/// `GenreItemDto` / `StudioDto`（item 子对象）与
 /// 列表端点元素（[`NameIdTypeDto`]）共用。`PersonItemDto` 在此基础上扩展
 /// `Role` / `Type` / `Character`。
 #[derive(Serialize)]

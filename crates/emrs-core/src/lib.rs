@@ -5,7 +5,7 @@
 //! - [`db`]：sqlx Any 统一池 + 三方言（sqlite/mysql/postgres）迁移
 //! - [`cache`]：Cache trait + 内存(moka)/Redis/Valkey 三实现
 //! - [`auth`]：bcrypt 密码 + token 签发/校验（user/auth_token 表）
-//! - [`emby`]：Emby 协议工具（时间格式、ItemID 编码）
+//! - [`emby`]：[`emby_proto`] 门面 re-export + 领域层转换（`UserItemData` → `ViewsUserData`）
 //! - [`stores`]：媒体库 Store 层（按领域拆分：library/item/media/image/ref/user_data）
 
 pub mod auth;

@@ -1,0 +1,11 @@
+[package]
+name = "emby-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Emby 协议原语：时间格式、命名空间 ID、共享 DTO base 与响应壳（无内部依赖）"
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true

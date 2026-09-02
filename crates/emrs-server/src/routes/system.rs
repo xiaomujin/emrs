@@ -1,10 +1,10 @@
 //! /System/Info（需认证）：完整服务器能力声明。
-//! 转码相关一律"不支持"，防客户端探测崩溃。成型走 [`emrs_core::emby::SystemInfoDto`]。
+//! 转码相关一律"不支持"，防客户端探测崩溃。成型走 [`crate::emby::SystemInfoDto`]。
 
 use axum::extract::State;
 use axum::response::IntoResponse;
 
-use emrs_core::emby::SystemInfoDto;
+use crate::emby::SystemInfoDto;
 
 use crate::state::AppState;
 

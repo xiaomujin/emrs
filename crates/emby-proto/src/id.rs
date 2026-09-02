@@ -8,7 +8,7 @@
 //! 前缀格式带连字符，与既有 `p-24` / `session-42` 一致。DB 不变（id 仍存裸 i64，
 //! 前缀纯传输层）。裸数字不再兼容——egress 始终发带前缀，ingress 裸数字一律视为非法。
 
-use super::parse_item_id;
+use crate::parse_item_id;
 
 /// ID 类型（命名空间）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -4,12 +4,12 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use emrs_core::auth::AuthContext;
-use emrs_core::emby::{
+use crate::emby::{
     CollectionFolderView, EpisodeCardJson, IdKind, ItemDto, ItemImageFlags, ItemsResponse,
     LatestItemJson, MovieSeriesCardJson, NextUpJson, ResumeCardJson, SeasonCardJson, ViewsResponse,
     attach_media_sources, item_to_json,
 };
+use emrs_core::auth::AuthContext;
 use emrs_core::stores::image_store::ImageTypeIds;
 use emrs_core::stores::taxonomy_store::ItemTaxonomy;
 use emrs_core::stores::{ItemRow, ItemsStore, ResumeEntry};
@@ -207,7 +207,7 @@ pub(super) async fn users_items(
     // l-{n} → 库列表（library_id=lid）；i-{seriesId} → 季列表；i-{seasonId} → 集列表；
     // 裸数字/非法前缀 → 无法解析父级，返回空（裸数字不再兼容）。
     // （Infuse 等客户端用 /Users/{uid}/Items?ParentId={seriesId} 展开剧集树）
-    let library_id = match q.parent_id.as_deref().map(emrs_core::emby::parse_id) {
+    let library_id = match q.parent_id.as_deref().map(crate::emby::parse_id) {
         // 无 ParentId → 全部（首页/全库视图）
         None => None,
         // 裸数字/非法前缀 → 无有效父级，返回空
@@ -443,7 +443,7 @@ pub(super) async fn users_resume(
     let start = q.start_index.unwrap_or(0).max(0);
     // ParentId 过滤：`l-{库}` 只留该库续看；`i-{n}` 命中剧集 series_id 或季 season_id；
     // 裸数字/其他前缀 → 无有效父级，返回空（与 users_items 一致）。
-    let (library_id, parent_item) = match q.parent_id.as_deref().map(emrs_core::emby::parse_id) {
+    let (library_id, parent_item) = match q.parent_id.as_deref().map(crate::emby::parse_id) {
         None => (None, None),
         Some(None) => return render_resume_cards(&st, Vec::new()).await,
         Some(Some((IdKind::Library, lid))) => (Some(lid), None),
@@ -468,7 +468,7 @@ pub(super) async fn users_latest(
     Query(q): Query<ItemsQuery>,
 ) -> Response {
     let limit = q.limit.unwrap_or(20).min(50);
-    let library_id = match q.parent_id.as_deref().map(emrs_core::emby::parse_id) {
+    let library_id = match q.parent_id.as_deref().map(crate::emby::parse_id) {
         None => None,
         Some(None) => return axum::Json(Vec::<LatestItemJson>::new()).into_response(),
         Some(Some((IdKind::Library, lid))) => Some(lid),
@@ -548,8 +548,7 @@ async fn person_detail(st: &AppState, person_id: i64) -> Response {
                     .flatten()
                     .filter(|(_, u)| !u.is_empty())
                     .map(|(img_id, _)| img_id);
-            let v =
-                emrs_core::emby::person_to_json(&st.cfg.emby.server_id, &person, primary_image_id);
+            let v = crate::emby::person_to_json(&st.cfg.emby.server_id, &person, primary_image_id);
             axum::Json(v).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),

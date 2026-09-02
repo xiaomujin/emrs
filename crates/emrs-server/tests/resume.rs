@@ -11,8 +11,8 @@
 //! 所有时间用显式 ISO 字符串（字典序==时间序），保证 anchor 确定。
 
 use emrs_core::config::StorageConfig;
-use emrs_core::emby::ResumeCardJson;
 use emrs_core::stores::{ItemsStore, ResumeEntry};
+use emrs_server::emby::ResumeCardJson;
 
 fn tmp_sqlite_dsn(tag: &str) -> String {
     let dir = std::env::temp_dir().join(format!("emrs-resume-{tag}-{}", std::process::id()));

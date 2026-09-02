@@ -1,30 +1,24 @@
-//! Emby 协议工具：时间格式化（7 位小数秒）、ItemId 解析、DTO 成型。
+//! Emby 协议原语 crate：时间格式化（7 位小数秒）、命名空间 ItemId、共享 DTO
+//! base 与响应壳。全部为纯 serde 类型与无副作用函数，不依赖本项目任何其它 crate。
 //!
-//! - 时间 / ItemId：本文件
-//! - [`dto`]：`ItemRow` / `MediaSourceRow` → Emby JSON（从 HTTP 层下沉到 core）
-//! - [`base`]：响应 DTO 共享 base（`BaseItemDto` / `ImageTagsDto`，`#[serde(flatten)]` 注入）
-//! - [`system`]：`/System/Info` 系列响应
-//! - [`session`]：PlaybackInfo / 会话 / 登录响应
-//! - [`user`]：`/Users` 系列响应（UserDto）
+//! - [`format_time`] / [`format_time_now`] / [`DEFAULT_TIME`]：Emby 时间格式（本文件）
+//! - [`parse_item_id`] / [`parse_id`] / [`IdKind`] 等：ID 编解码，见 [`id`]
+//! - [`BaseItemDto`] / [`ImageTagsDto`] 等：多接口复用的 flatten 字段组，见 [`base`]
+//! - [`ViewsUserData`]：统一 UserData 响应类型（`From<DB 行>` 转换在业务侧实现）
+//! - [`ItemsResponse`] / [`ItemsCounts`]：列表端点响应壳
+//! - [`SystemInfoDto`] 等：`/System/Info` 系列响应，见 [`system`]
 
 mod base;
-mod dto;
 mod id;
-mod latest;
-mod list_dto;
-mod session;
 mod system;
-mod user;
-mod views;
+mod userdata;
+mod wrappers;
+
 pub use base::*;
-pub use dto::*;
 pub use id::*;
-pub use latest::*;
-pub use list_dto::*;
-pub use session::*;
 pub use system::*;
-pub use user::*;
-pub use views::*;
+pub use userdata::*;
+pub use wrappers::*;
 
 use chrono::{SecondsFormat, Utc};
 

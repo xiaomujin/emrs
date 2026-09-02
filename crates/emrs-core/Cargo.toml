@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+emby-proto.workspace = true
 tokio = { workspace = true, features = ["process"] }
 serde.workspace = true
 serde_json.workspace = true

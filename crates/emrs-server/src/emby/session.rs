@@ -125,7 +125,7 @@ impl SessionInfoDto {
         server_id: &str,
         user_name: &str,
         last_activity_date: &str,
-        device: &crate::auth::DeviceInfo,
+        device: &emrs_core::auth::DeviceInfo,
     ) -> Self {
         Self {
             play_state: PlayStateDto::login(),
@@ -174,7 +174,7 @@ impl SessionListEntryDto {
         session_id: String,
         user_id: &str,
         user_name: &str,
-        device: &crate::auth::DeviceInfo,
+        device: &emrs_core::auth::DeviceInfo,
         position_ticks: i64,
     ) -> Self {
         Self {

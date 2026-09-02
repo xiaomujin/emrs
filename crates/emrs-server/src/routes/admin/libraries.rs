@@ -182,7 +182,7 @@ pub(super) async fn create_library(
             .into_response();
     }
 
-    let now = emrs_core::emby::format_time_now();
+    let now = crate::emby::format_time_now();
     let result: Result<i64, sqlx::Error> = async {
         let mut tx = st.db.pool().begin().await?;
         sqlx::query("INSERT INTO library (name, collection_type) VALUES (?, ?)")
@@ -273,7 +273,7 @@ pub(super) async fn update_library(
         return (StatusCode::BAD_REQUEST, "路径非法（归一化后为空）").into_response();
     }
 
-    let now = emrs_core::emby::format_time_now();
+    let now = crate::emby::format_time_now();
     let result: Result<bool, sqlx::Error> = async {
         let mut tx = st.db.pool().begin().await?;
         let r = sqlx::query(
@@ -665,7 +665,7 @@ pub(super) async fn manual_identify_item(
     Path(id): Path<i64>,
     axum::extract::Json(body): axum::extract::Json<ManualIdentifyInput>,
 ) -> Response {
-    let now = emrs_core::emby::format_time_now();
+    let now = crate::emby::format_time_now();
     // 仅顶层类型可手动识别（子级随父级派生）
     let affected = sqlx::query(
         "UPDATE item SET tmdb_id = ?, imdb_id = NULL, tvdb_id = NULL, \

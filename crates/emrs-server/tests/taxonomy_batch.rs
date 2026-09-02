@@ -5,9 +5,9 @@
 //! 被调用方 `.unwrap_or_default()` 吞掉 → People/Genres 全空。
 
 use emrs_core::config::StorageConfig;
-use emrs_core::emby::{ItemImageFlags, item_to_json};
 use emrs_core::stores::taxonomy_store::PersonBrief;
 use emrs_core::stores::{ItemRow, ItemsStore};
+use emrs_server::emby::{ItemImageFlags, item_to_json};
 
 fn tmp_sqlite_dsn(tag: &str) -> String {
     let dir = std::env::temp_dir().join(format!("emrs-tax-{tag}-{}", std::process::id()));

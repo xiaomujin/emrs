@@ -21,6 +21,7 @@ pub mod taxonomy_store;
 pub mod user_data_store;
 
 pub use library_store::{COLLECTION_TYPES, is_valid_collection_type};
+pub use media_store::StreamInfo;
 
 use crate::db::Db;
 

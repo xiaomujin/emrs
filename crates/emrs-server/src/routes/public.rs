@@ -62,7 +62,7 @@ async fn admin_page() -> impl IntoResponse {
 
 /// GET /System/Info/Public：匿名探测（Infuse/Senplayer 发现第一跳）。
 async fn info_public(State(state): State<AppState>) -> impl IntoResponse {
-    axum::Json(emrs_core::emby::SystemInfoPublicDto::new(
+    axum::Json(crate::emby::SystemInfoPublicDto::new(
         &state.cfg.emby.server_name,
         &state.cfg.emby.server_id,
     ))
@@ -302,16 +302,16 @@ async fn authenticate_by_name(State(state): State<AppState>, req: Request) -> Re
     .await;
 
     let user_dto_val = user_dto(&state, &user);
-    let now = emrs_core::emby::format_time_now();
+    let now = crate::emby::format_time_now();
     let user_id_str = user.id.to_string();
-    let session_info = emrs_core::emby::SessionInfoDto::new(
+    let session_info = crate::emby::SessionInfoDto::new(
         &user_id_str,
         &state.cfg.emby.server_id,
         &user.username,
         &now,
         &device,
     );
-    axum::Json(emrs_core::emby::AuthenticateResponseDto {
+    axum::Json(crate::emby::AuthenticateResponseDto {
         user: user_dto_val,
         session_info,
         access_token: token,

@@ -2,48 +2,13 @@
 //!
 //! 与 `dto.rs`（item → Emby JSON）不同，这里是**类型化**结构体：
 //! 库视图不再关联 `ItemRow`，直接由 `LibraryView` 行 + 固定默认值成型。
-//! `ViewsUserData` 作为统一 UserData DTO，同时被库视图 / item 详情 / 收藏·已看端点复用。
+//! [`ViewsUserData`] 类型定义在 `emby-proto`，其存储层转换是 core 的固有方法
+//! [`UserItemData::to_views_user_data`](emrs_core::stores::UserItemData::to_views_user_data)。
 
 use serde::Serialize;
 
-use super::base::BaseItemDto;
-use super::id::library_id;
-use crate::stores::{LibraryView, UserItemData};
-
-/// Emby UserData DTO（统一返回类型）：库视图 / item 详情 / 收藏·已看端点共用。
-///
-/// 由 DB 实体 [`UserItemData`] 经 `From` 转换成型（`i64` 布尔 → `bool`）。
-///
-/// 字段语义分两类：`last_played_date` / `played_percentage` 保留旧「恒发 null」
-/// 语义（无 `skip`，与 Emby 客户端 null==absent 容忍一致）；`unplayed_item_count`
-/// 仅 folder 项（Season/Series）有值，其余**省略**（`skip_serializing_if`）——
-/// 真实 Emby Episode 的 UserData 不带 `UnplayedItemCount` 键。
-#[derive(Serialize, Default)]
-#[serde(rename_all = "PascalCase")]
-pub struct ViewsUserData {
-    pub playback_position_ticks: i64,
-    pub is_favorite: bool,
-    pub played: bool,
-    pub play_count: i64,
-    pub last_played_date: Option<String>,
-    pub played_percentage: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unplayed_item_count: Option<i64>,
-}
-
-impl From<UserItemData> for ViewsUserData {
-    fn from(d: UserItemData) -> Self {
-        Self {
-            played: d.played != 0,
-            play_count: d.play_count,
-            playback_position_ticks: d.playback_position_ticks.unwrap_or(0),
-            last_played_date: d.last_played_date,
-            is_favorite: d.is_favorite != 0,
-            played_percentage: None,
-            unplayed_item_count: None,
-        }
-    }
-}
+use super::{BaseItemDto, library_id};
+use emrs_core::stores::LibraryView;
 
 /// 单个媒体库视图（CollectionFolder）。
 ///
@@ -136,39 +101,6 @@ pub struct ViewsResponse {
     pub items: Vec<CollectionFolderView>,
     #[serde(rename = "TotalRecordCount")]
     pub total_record_count: usize,
-}
-
-/// Emby 分页 Items 响应壳：`{ Items, TotalRecordCount }`。
-///
-/// 列表端点（Resume / NextUp / Seasons / Episodes / Genres / Persons / Tags 等）
-/// 统一用它；`T` 为条目类型（通用 `serde_json::Value` 或类型化 DTO）。
-#[derive(Serialize)]
-pub struct ItemsResponse<T> {
-    #[serde(rename = "Items")]
-    pub items: Vec<T>,
-    #[serde(rename = "TotalRecordCount")]
-    pub total_record_count: usize,
-}
-
-/// `GET /Items/Counts` 响应：各类型条目计数。
-///
-/// 对齐参考 Emby 字段集；当前为 stub（全零），待计数查询落地后由
-/// 路由层填真实值。类型化结构体 + `Default` 全零，序列化走 serde。
-#[derive(Serialize, Default)]
-#[serde(rename_all = "PascalCase")]
-pub struct ItemsCounts {
-    pub movie_count: i64,
-    pub series_count: i64,
-    pub episode_count: i64,
-    pub artist_count: i64,
-    pub program_count: i64,
-    pub trailer_count: i64,
-    pub song_count: i64,
-    pub album_count: i64,
-    pub music_video_count: i64,
-    pub box_set_count: i64,
-    pub book_count: i64,
-    pub item_count: i64,
 }
 
 #[cfg(test)]
@@ -272,18 +204,5 @@ mod tests {
         let out = serde_json::to_value(resp).unwrap();
         assert_eq!(out["TotalRecordCount"], 1);
         assert_eq!(out["Items"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn items_response_wraps_items_and_count() {
-        let resp = ItemsResponse {
-            items: vec![serde_json::json!({ "Id": "42", "Type": "Episode" })],
-            total_record_count: 1,
-        };
-        let out = serde_json::to_value(resp).unwrap();
-        // 对齐 ViewsResponse：Items / TotalRecordCount PascalCase 壳。
-        assert_eq!(out["TotalRecordCount"], 1);
-        assert_eq!(out["Items"].as_array().unwrap().len(), 1);
-        assert_eq!(out["Items"][0]["Id"], "42");
     }
 }

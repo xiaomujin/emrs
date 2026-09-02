@@ -150,7 +150,7 @@ pub(super) async fn start_scan(
             }
             if jobs.is_cancelled(&job_id) {
                 // 协作式取消：撤销尚未开跑的行；running 行由流水线跑完（粒度同旧实现）
-                let mut q = sqlx::query(&cancel_sql).bind(emrs_core::emby::format_time_now());
+                let mut q = sqlx::query(&cancel_sql).bind(crate::emby::format_time_now());
                 for id in &job_rows {
                     q = q.bind(id);
                 }
@@ -275,13 +275,13 @@ pub(super) async fn start_scrape(
             "UPDATE item SET scrape_status = 'pending', scrape_attempts = 0, updated_at = ? \
              WHERE type IN ('movie', 'series')",
         )
-        .bind(emrs_core::emby::format_time_now());
+        .bind(crate::emby::format_time_now());
         if let Some(lid) = library_id {
             q = sqlx::query(
                 "UPDATE item SET scrape_status = 'pending', scrape_attempts = 0, updated_at = ? \
                  WHERE type IN ('movie', 'series') AND library_id = ?",
             )
-            .bind(emrs_core::emby::format_time_now())
+            .bind(crate::emby::format_time_now())
             .bind(lid);
         }
         match q.execute(db.pool()).await {
@@ -484,7 +484,7 @@ pub(super) async fn start_probe(
             let metadata = serde_json::to_string(&media.streams).unwrap_or_else(|_| "[]".to_string());
             let chapters_json =
                 serde_json::to_string(&media.chapters).unwrap_or_else(|_| "[]".to_string());
-            let now = emrs_core::emby::format_time_now();
+            let now = crate::emby::format_time_now();
 
             let res = sqlx::query(
                 "UPDATE media_source \

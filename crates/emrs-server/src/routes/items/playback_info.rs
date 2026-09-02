@@ -9,8 +9,8 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
+use crate::emby::{IdKind, PlaybackInfoResponseDto, media_sources_json};
 use emrs_core::auth::AuthContext;
-use emrs_core::emby::{IdKind, PlaybackInfoResponseDto, media_sources_json};
 use emrs_core::stores::{ItemsStore, MediaSourceRow};
 
 use super::parse_id;
@@ -180,7 +180,7 @@ pub(crate) async fn item_image(
     // }
     //
     // // 命名空间分流：p-{id} → people（演员头像）；i-{id}/裸数字 → item；其余 404
-    // match emrs_core::emby::parse_id(&id) {
+    // match crate::emby::parse_id(&id) {
     //     Some((IdKind::People, rid)) => {
     //         let url = find_image_url(&st, "people", rid, image_type, index).await;
     //         proxy_image(&st, url, q).await
@@ -251,7 +251,7 @@ pub(crate) struct ResizeQuery {
 /// 从 `tag=img-{id}` 解析图片行 id，直接查 `item_image.path_url`。
 async fn resolve_by_tag(st: &AppState, tag: Option<&str>) -> Option<String> {
     let tag = tag?;
-    let Some((IdKind::Image, img_id)) = emrs_core::emby::parse_id(tag) else {
+    let Some((IdKind::Image, img_id)) = crate::emby::parse_id(tag) else {
         return None;
     };
     sqlx::query_scalar::<_, Option<String>>("SELECT path_url FROM item_image WHERE id = ?")

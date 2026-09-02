@@ -1,11 +1,11 @@
 //! Emby `/Users` 系列响应 DTO：User 对象（登录 / `/Users/Me` / `/Users/{id}` 共用）。
 //!
 //! `Configuration` / `Policy` 是固定模板（仅少数字段随用户变），常量集中到
-//! `*_emby_default` 构造器；`user_to_json` 由 [`crate::auth::UserRow`] 成型。
+//! `*_emby_default` 构造器；`user_to_json` 由 [`emrs_core::auth::UserRow`] 成型。
 
 use serde::Serialize;
 
-use crate::auth::UserRow;
+use emrs_core::auth::UserRow;
 
 /// 用户播放/字幕偏好（固定模板）。
 #[derive(Serialize, Default)]

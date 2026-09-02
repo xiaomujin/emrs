@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
-use emrs_core::emby::{
+use crate::emby::{
     NameIdDto, NameIdTypeDto, SessionListEntryDto, TagDto, genre_id, person_id, studio_id,
 };
 
@@ -86,10 +86,10 @@ async fn sessions(
     let sessions: Vec<SessionListEntryDto> = items
         .iter()
         .map(|item| {
-            let now_playing_item = emrs_core::emby::item_to_json(
+            let now_playing_item = crate::emby::item_to_json(
                 &st.cfg.emby.server_id,
                 item,
-                &emrs_core::emby::ItemImageFlags::from_batch(&flags, item),
+                &crate::emby::ItemImageFlags::from_batch(&flags, item),
                 None,
                 None,
                 None,
@@ -136,16 +136,16 @@ struct PaginationQuery {
 /// `l-{n}` → `Some(Some(id))`；未传/空值 → `Some(None)`（全库）；
 /// 裸数字/非法/其他前缀 → `None`（调用方返回空页，与 Users/Items 导航语义一致）。
 fn library_parent_filter(raw: Option<&str>) -> Option<Option<i64>> {
-    match raw.map(emrs_core::emby::parse_id) {
+    match raw.map(crate::emby::parse_id) {
         None => Some(None),
-        Some(Some((emrs_core::emby::IdKind::Library, id))) => Some(Some(id)),
+        Some(Some((crate::emby::IdKind::Library, id))) => Some(Some(id)),
         Some(Some(_)) | Some(None) => None,
     }
 }
 
 /// ParentId 非法时的空列表应答（分类端点共用）。
 fn empty_taxonomy_response() -> Response {
-    axum::Json(emrs_core::emby::ItemsResponse::<NameIdTypeDto> {
+    axum::Json(crate::emby::ItemsResponse::<NameIdTypeDto> {
         items: Vec::new(),
         total_record_count: 0,
     })
@@ -175,7 +175,7 @@ async fn list_genres(
                     item_type: "Genre".into(),
                 })
                 .collect();
-            axum::Json(emrs_core::emby::ItemsResponse {
+            axum::Json(crate::emby::ItemsResponse {
                 items,
                 total_record_count: result.total as usize,
             })
@@ -211,7 +211,7 @@ async fn list_persons(
                     item_type: "Person".into(),
                 })
                 .collect();
-            axum::Json(emrs_core::emby::ItemsResponse {
+            axum::Json(crate::emby::ItemsResponse {
                 items,
                 total_record_count: result.total as usize,
             })
@@ -236,7 +236,7 @@ async fn list_tags(State(st): State<AppState>) -> Response {
                 })
                 .collect();
             let total = items.len();
-            axum::Json(emrs_core::emby::ItemsResponse {
+            axum::Json(crate::emby::ItemsResponse {
                 items,
                 total_record_count: total,
             })
@@ -272,7 +272,7 @@ async fn list_studios(
                     item_type: "Studio".into(),
                 })
                 .collect();
-            axum::Json(emrs_core::emby::ItemsResponse {
+            axum::Json(crate::emby::ItemsResponse {
                 items,
                 total_record_count: r.total as usize,
             })
@@ -308,7 +308,7 @@ async fn list_years(
                     item_type: "Year".into(),
                 })
                 .collect();
-            axum::Json(emrs_core::emby::ItemsResponse {
+            axum::Json(crate::emby::ItemsResponse {
                 items,
                 total_record_count: result.total as usize,
             })
@@ -346,7 +346,7 @@ async fn list_official_ratings(
                     item_type: "Rating".into(),
                 })
                 .collect();
-            axum::Json(emrs_core::emby::ItemsResponse {
+            axum::Json(crate::emby::ItemsResponse {
                 items,
                 total_record_count: result.total as usize,
             })
@@ -361,16 +361,14 @@ async fn list_official_ratings(
 
 async fn items_counts(State(st): State<AppState>) -> Response {
     match emrs_core::stores::ItemsStore::item_counts(&st.db).await {
-        Ok((movie_count, series_count, episode_count)) => {
-            axum::Json(emrs_core::emby::ItemsCounts {
-                movie_count,
-                series_count,
-                episode_count,
-                item_count: movie_count + series_count + episode_count,
-                ..Default::default()
-            })
-            .into_response()
-        }
+        Ok((movie_count, series_count, episode_count)) => axum::Json(crate::emby::ItemsCounts {
+            movie_count,
+            series_count,
+            episode_count,
+            item_count: movie_count + series_count + episode_count,
+            ..Default::default()
+        })
+        .into_response(),
         Err(e) => {
             tracing::error!(error = %e, "items counts query failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -394,6 +392,6 @@ async fn users_list() -> impl IntoResponse {
 }
 
 /// Emby User DTO。
-pub fn user_dto(state: &AppState, u: &emrs_core::auth::UserRow) -> emrs_core::emby::UserDto {
-    emrs_core::emby::user_to_json(&state.cfg.emby.server_id, u)
+pub fn user_dto(state: &AppState, u: &emrs_core::auth::UserRow) -> crate::emby::UserDto {
+    crate::emby::user_to_json(&state.cfg.emby.server_id, u)
 }

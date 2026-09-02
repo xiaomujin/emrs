@@ -658,6 +658,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "emby-proto"
+version = "0.1.7"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "emrs-core"
 version = "0.1.7"
 dependencies = [
@@ -666,6 +675,7 @@ dependencies = [
  "bcrypt",
  "chrono",
  "dashmap",
+ "emby-proto",
  "ffmpeg-sidecar",
  "filetime",
  "jsonwebtoken",
@@ -698,6 +708,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
+ "emby-proto",
  "emrs-core",
  "http",
  "http-body-util",

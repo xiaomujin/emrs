@@ -9,72 +9,13 @@
 
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use crate::stores::StreamInfo;
 
 /// 需要直扫入库存入 `media_source` 的视频扩展名白名单。
 pub const VIDEO_EXTS: &[&str] = &[
     "mp4", "mkv", "avi", "ts", "m4v", "mov", "wmv", "flv", "webm", "mpg", "mpeg", "m2ts", "3gp",
     "ogv",
 ];
-
-/// 单个媒体流信息（存入 `media_source.metadata`，输出到 Emby `MediaStreams`）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StreamInfo {
-    /// "Video" | "Audio" | "Subtitle"
-    pub stream_type: String,
-    /// 编码名（h264/hevc/ac3/aac/ass…）
-    pub codec: String,
-    /// ffprobe 全局流索引（视频0/音频1/字幕2…）
-    pub index: Option<i64>,
-    /// 显示标题（Emby DisplayTitle；如视频 "1080p hevc"、字幕 "JPSC (ass)"）
-    pub title: Option<String>,
-    /// 语言代码（如 jpn/chi/eng）
-    pub language: Option<String>,
-    /// 视频宽（像素）
-    pub width: Option<i64>,
-    /// 视频高（像素）
-    pub height: Option<i64>,
-    /// 帧率（fps）
-    pub frame_rate: Option<f64>,
-    /// 码率（bit/s）
-    pub bit_rate: Option<i64>,
-    /// 像素格式（如 yuv420p10le）
-    pub pixel_format: Option<String>,
-    /// 音频声道数
-    pub channels: Option<i64>,
-    /// 音频采样率（Hz）
-    pub sample_rate: Option<i64>,
-    /// 音频采样位数
-    pub bit_depth: Option<i64>,
-    /// 原色（如 bt709）
-    pub color_primaries: Option<String>,
-    /// 色彩空间（如 bt709）
-    pub color_space: Option<String>,
-    /// 色彩转换（如 bt709）
-    pub color_transfer: Option<String>,
-    /// 长宽比（如 16:9）
-    pub display_aspect_ratio: Option<String>,
-    /// 默认流标记
-    pub is_default: Option<bool>,
-    /// 强制标记（字幕）
-    pub is_forced: Option<bool>,
-    /// 编码档次（视频 High/Main 10、音频 LC…）
-    pub profile: Option<String>,
-    /// 编码级别（h264 50 表示 5.0、hevc 120 表示 12.0）
-    pub level: Option<i64>,
-    /// 参考帧数
-    pub refs: Option<i64>,
-    /// 是否隔行扫描（由 field_order 推断）
-    pub is_interlaced: Option<bool>,
-    /// 时间基（如 1/1000、1/90000）
-    pub time_base: Option<String>,
-    /// 音频声道布局（如 stereo、5.1）
-    pub channel_layout: Option<String>,
-    /// 像素宽高比（如 1:1；非 1:1 视为变形 IsAnamorphic）
-    pub sample_aspect_ratio: Option<String>,
-    /// h264 是否 AVC 封装（决定 NalLengthSize）
-    pub is_avc: Option<bool>,
-}
 
 /// 是否是需要直扫的视频扩展名（入参需已小写）。
 pub fn is_video_ext(ext: &str) -> bool {

@@ -23,8 +23,8 @@ use crate::http_client::Outbound;
 use super::filename;
 use super::nfo;
 use super::probe;
-use super::probe::StreamInfo;
 use super::strm::parse_strm;
+use crate::stores::StreamInfo;
 mod scrape;
 
 /// 扫描结果统计。
