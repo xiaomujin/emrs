@@ -17,6 +17,7 @@ pub mod image_store;
 pub mod item_store;
 pub mod library_store;
 pub mod media_store;
+pub mod settings_store;
 pub mod taxonomy_store;
 pub mod user_data_store;
 
@@ -532,39 +533,19 @@ impl ItemsStore {
         taxonomy_store::taxonomy_batch(db, item_ids).await
     }
 
-    /// 读取 app_setting（单个 key）。
+    /// 读取 app_setting（单个 key）。委托 [`settings_store`]。
     pub async fn get_setting(db: &Db, key: &str) -> anyhow::Result<Option<String>> {
-        let row =
-            sqlx::query_scalar::<_, Option<String>>("SELECT value FROM app_setting WHERE key = ?")
-                .bind(key)
-                .fetch_optional(db.pool())
-                .await?;
-        Ok(row.flatten())
+        settings_store::get_setting(db, key).await
     }
 
-    /// 写入 app_setting（UPSERT）。
+    /// 写入 app_setting（UPSERT）。委托 [`settings_store`]。
     pub async fn set_setting(db: &Db, key: &str, value: &str) -> anyhow::Result<()> {
-        let now = crate::emby::format_time_now();
-        sqlx::query(
-            "INSERT INTO app_setting (key, value, updated_at) VALUES (?, ?, ?) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        )
-        .bind(key)
-        .bind(value)
-        .bind(&now)
-        .execute(db.pool())
-        .await?;
-        Ok(())
+        settings_store::set_setting(db, key, value).await
     }
 
-    /// 读取全部 app_setting。
+    /// 读取全部 app_setting。委托 [`settings_store`]。
     pub async fn list_settings(db: &Db) -> anyhow::Result<Vec<(String, String)>> {
-        let rows = sqlx::query_as::<_, (String, String)>(
-            "SELECT key, value FROM app_setting ORDER BY key",
-        )
-        .fetch_all(db.pool())
-        .await?;
-        Ok(rows)
+        settings_store::list_settings(db).await
     }
 }
 
