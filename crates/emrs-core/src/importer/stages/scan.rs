@@ -12,6 +12,7 @@ use anyhow::Result;
 
 use crate::db::Db;
 use crate::http_client::Outbound;
+use crate::stores::scan_job_store;
 
 use crate::importer::scanner::{ScanStats, Scanner};
 
@@ -52,61 +53,21 @@ impl ScanStage {
         self.scanner.scan_path(path).await
     }
 
-    /// 创建 scan_job 记录。
+    /// 创建 scan_job 记录（委托 [`scan_job_store`]）。
     pub async fn create_scan_job(&self, library_id: i64, triggered_by: &str) -> Result<i64> {
-        let now = crate::emby::format_time_now();
-        sqlx::query(
-            "INSERT INTO scan_job (library_id, status, triggered_by, created_at) \
-             VALUES (?, 'pending', ?, ?)",
-        )
-        .bind(library_id)
-        .bind(triggered_by)
-        .bind(&now)
-        .execute(self.db.pool())
-        .await?;
-        Ok(
-            sqlx::query_scalar::<_, i64>("SELECT id FROM scan_job ORDER BY id DESC LIMIT 1")
-                .fetch_one(self.db.pool())
-                .await?,
-        )
+        scan_job_store::create(&self.db, library_id, triggered_by).await
     }
 
-    /// 更新 scan_job 状态。
+    /// 更新 scan_job 状态（委托 [`scan_job_store`]；ScanStats 在此折算成计数传入）。
     pub async fn update_scan_job_status(
         &self,
         job_id: i64,
         status: &str,
         stats: Option<&ScanStats>,
     ) {
-        let now = crate::emby::format_time_now();
-        let (started_at, finished_at) = match status {
-            "running" => (Some(now.as_str()), None),
-            "done" | "failed" | "canceled" => (None, Some(now.as_str())),
-            _ => (None, None),
-        };
         let added = stats.map(|s| s.movies + s.series + s.episodes).unwrap_or(0) as i64;
         let updated = stats.map(|s| s.media).unwrap_or(0) as i64;
-
-        let result = sqlx::query(
-            "UPDATE scan_job SET status = ?, started_at = COALESCE(?, started_at), \
-             finished_at = COALESCE(?, finished_at), \
-             scanned_dirs = COALESCE(scanned_dirs, 0) + ?, \
-             added_items = COALESCE(added_items, 0) + ?, \
-             updated_items = COALESCE(updated_items, 0) + ? \
-             WHERE id = ?",
-        )
-        .bind(status)
-        .bind(started_at)
-        .bind(finished_at)
-        .bind(0i64)
-        .bind(added)
-        .bind(updated)
-        .bind(job_id)
-        .execute(self.db.pool())
-        .await;
-        if let Err(e) = &result {
-            tracing::warn!(job_id, status, error = %e, "scan_job 状态更新失败");
-        }
+        scan_job_store::update_status(&self.db, job_id, status, added, updated).await;
     }
 
     /// 扫描指定库路径，带 scan_job 生命周期管理。
@@ -124,25 +85,15 @@ impl ScanStage {
             }
             Err(e) => {
                 self.update_scan_job_status(job_id, "failed", None).await;
-                let _ = sqlx::query("UPDATE scan_job SET error = ? WHERE id = ?")
-                    .bind(format!("{e:#}"))
-                    .bind(job_id)
-                    .execute(self.db.pool())
-                    .await;
+                let _ = scan_job_store::set_error(&self.db, job_id, &format!("{e:#}")).await;
                 Err(e)
             }
         }
     }
 
-    /// 查询待处理的 scan_job（status='pending'）。
+    /// 查询待处理的 scan_job（status='pending'）。委托 [`scan_job_store`]。
     pub async fn pending_scan_jobs(&self) -> Vec<(i64, i64, String)> {
-        sqlx::query_as::<_, (i64, i64, String)>(
-            "SELECT id, library_id, triggered_by FROM scan_job \
-             WHERE status = 'pending' ORDER BY created_at ASC LIMIT 10",
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .unwrap_or_default()
+        scan_job_store::pending(&self.db).await
     }
 
     /// 统一扫描入口：定位/创建库记录后写入 `scan_job(pending)` 行，

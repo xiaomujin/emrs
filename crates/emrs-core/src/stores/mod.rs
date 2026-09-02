@@ -17,6 +17,7 @@ pub mod image_store;
 pub mod item_store;
 pub mod library_store;
 pub mod media_store;
+pub mod scan_job_store;
 pub mod settings_store;
 pub mod taxonomy_store;
 pub mod user_data_store;
