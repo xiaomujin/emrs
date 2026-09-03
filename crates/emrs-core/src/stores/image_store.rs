@@ -173,3 +173,77 @@ pub async fn get_parent_image_path(
         _ => Ok(None),
     }
 }
+
+// ---------------------------------------------------------------------------
+// item_image 写路径（I1：本模块是 item_image 唯一写者）。
+// 由 importer 扫描/刮削挂载图片时调用；失败静默忽略（与迁移前逐字一致）。
+// ---------------------------------------------------------------------------
+
+/// 幂等设置单张对象图片 URL：同 `(parent_type, parent_id, image_type)` 存在则更新
+/// `path_url`（不改 updated_at），否则插入一行（`path_type='url'`，仅记 created_at）。
+/// `image_type` 须为调用方已小写的值。
+pub async fn upsert_image_url(
+    db: &Db,
+    parent_type: &str,
+    parent_id: i64,
+    image_type: &str,
+    path_url: &str,
+) {
+    let now = crate::emby::format_time_now();
+    let existing: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM item_image WHERE parent_type = ? AND parent_id = ? \
+         AND image_type = ? LIMIT 1",
+    )
+    .bind(parent_type)
+    .bind(parent_id)
+    .bind(image_type)
+    .fetch_optional(db.pool())
+    .await
+    .unwrap_or(None);
+
+    if let Some(id) = existing {
+        let _ = sqlx::query("UPDATE item_image SET path_url = ? WHERE id = ?")
+            .bind(path_url)
+            .bind(id)
+            .execute(db.pool())
+            .await;
+    } else {
+        let _ = sqlx::query(
+            "INSERT INTO item_image (parent_type, parent_id, image_type, path_type, path_url, created_at) \
+             VALUES (?, ?, ?, 'url', ?, ?)",
+        )
+        .bind(parent_type)
+        .bind(parent_id)
+        .bind(image_type)
+        .bind(path_url)
+        .bind(&now)
+        .execute(db.pool())
+        .await;
+    }
+}
+
+/// 删除某对象指定类型全部图片（重抓 backdrop 前重置）。
+pub async fn delete_images_of_type(db: &Db, parent_type: &str, parent_id: i64, image_type: &str) {
+    let _ = sqlx::query(
+        "DELETE FROM item_image WHERE parent_type = ? AND parent_id = ? AND image_type = ?",
+    )
+    .bind(parent_type)
+    .bind(parent_id)
+    .bind(image_type)
+    .execute(db.pool())
+    .await;
+}
+
+/// 插入一张 backdrop 图片（`path_type='url'`，带 created_at/updated_at，同批次共用 `now`）。
+pub async fn insert_backdrop(db: &Db, item_id: i64, path_url: &str, now: &str) {
+    let _ = sqlx::query(
+        "INSERT INTO item_image (parent_type, parent_id, image_type, path_type, path_url, created_at, updated_at) \
+         VALUES ('item', ?, 'backdrop', 'url', ?, ?, ?)",
+    )
+    .bind(item_id)
+    .bind(path_url)
+    .bind(now)
+    .bind(now)
+    .execute(db.pool())
+    .await;
+}

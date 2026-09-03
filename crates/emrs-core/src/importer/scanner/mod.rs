@@ -25,6 +25,7 @@ use super::nfo;
 use super::probe;
 use super::strm::parse_strm;
 use crate::stores::StreamInfo;
+use crate::stores::image_store;
 mod scrape;
 
 /// 扫描结果统计。
@@ -1266,21 +1267,36 @@ impl Scanner {
     }
 
     /// 幂等关联一张图片到任意对象（`parent_type`：'item' / 'people'）。
-    /// 同 (parent_type, parent_id, image_type) 已存在则更新 URL，否则插入。
+    /// 同 (parent_type, parent_id, image_type) 已存在则更新 URL，否则插入。委托 [`image_store`]。
+    async fn attach_image_for(
+        &self,
+        parent_type: &str,
+        parent_id: i64,
+        image_type: &str,
+        path_url: &str,
+    ) {
+        if path_url.is_empty() {
+            return;
+        }
+        image_store::upsert_image_url(
+            &self.db,
+            parent_type,
+            parent_id,
+            &image_type.to_ascii_lowercase(),
+            path_url,
+        )
+        .await;
+    }
+
     /// 批量关联 backdrop 图片（先删旧再插新，最多 `max_count` 张，按 vote_average 降序）。
+    /// 图片选择/排序/URL 构造留在此，落库委托 [`image_store`]。
     pub async fn attach_backdrops(
         &self,
         item_id: i64,
         backdrops: &[crate::importer::tmdb::TmdbImage],
         max_count: usize,
     ) {
-        let _ = sqlx::query(
-            "DELETE FROM item_image WHERE parent_type = 'item' AND parent_id = ? AND image_type = 'backdrop'",
-        )
-        .bind(item_id)
-        .execute(self.db.pool())
-        .await;
-
+        image_store::delete_images_of_type(&self.db, "item", item_id, "backdrop").await;
         let mut sorted: Vec<&crate::importer::tmdb::TmdbImage> = backdrops.iter().collect();
         sorted.sort_by(|a, b| {
             b.vote_average
@@ -1295,60 +1311,7 @@ impl Scanner {
                 continue;
             }
             let url = format!("https://image.tmdb.org/t/p/w1280{}", img.file_path);
-            let _ = sqlx::query(
-                "INSERT INTO item_image (parent_type, parent_id, image_type, path_type, path_url, created_at, updated_at) \
-                 VALUES ('item', ?, 'backdrop', 'url', ?, ?, ?)",
-            )
-            .bind(item_id)
-            .bind(&url)
-            .bind(&now)
-            .bind(&now)
-            .execute(self.db.pool())
-            .await;
-        }
-    }
-
-    async fn attach_image_for(
-        &self,
-        parent_type: &str,
-        parent_id: i64,
-        image_type: &str,
-        path_url: &str,
-    ) {
-        if path_url.is_empty() {
-            return;
-        }
-        let now = crate::emby::format_time_now();
-        let img_type_lower = image_type.to_ascii_lowercase();
-        let existing: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM item_image WHERE parent_type = ? AND parent_id = ? \
-             AND image_type = ? LIMIT 1",
-        )
-        .bind(parent_type)
-        .bind(parent_id)
-        .bind(&img_type_lower)
-        .fetch_optional(self.db.pool())
-        .await
-        .unwrap_or(None);
-
-        if let Some(id) = existing {
-            let _ = sqlx::query("UPDATE item_image SET path_url = ? WHERE id = ?")
-                .bind(path_url)
-                .bind(id)
-                .execute(self.db.pool())
-                .await;
-        } else {
-            let _ = sqlx::query(
-                "INSERT INTO item_image (parent_type, parent_id, image_type, path_type, path_url, created_at) \
-                 VALUES (?, ?, ?, 'url', ?, ?)",
-            )
-            .bind(parent_type)
-            .bind(parent_id)
-            .bind(&img_type_lower)
-            .bind(path_url)
-            .bind(&now)
-            .execute(self.db.pool())
-            .await;
+            image_store::insert_backdrop(&self.db, item_id, &url, &now).await;
         }
     }
 }
