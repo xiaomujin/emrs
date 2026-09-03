@@ -82,3 +82,39 @@ pub async fn pending(db: &Db) -> Vec<(i64, i64, String)> {
     .await
     .unwrap_or_default()
 }
+
+/// 批量读取指定任务的 `(status, added_items, updated_items)`，供 admin 轮询进度。
+/// `added_items` / `updated_items` 为 NULL 时取 0（与旧口径一致）。
+pub async fn poll_status_batch(db: &Db, ids: &[i64]) -> Vec<(String, i64, i64)> {
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let ph = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT status, COALESCE(added_items, 0), COALESCE(updated_items, 0) \
+         FROM scan_job WHERE id IN ({ph})"
+    );
+    let mut q = sqlx::query_as::<_, (String, i64, i64)>(&sql);
+    for id in ids {
+        q = q.bind(id);
+    }
+    q.fetch_all(db.pool()).await.unwrap_or_default()
+}
+
+/// 协作式取消：把仍处于 pending 的任务置 `canceled` 并记 finished_at。
+/// running 行不动（由流水线跑完，粒度同旧实现）。
+pub async fn cancel_pending_batch(db: &Db, ids: &[i64]) {
+    if ids.is_empty() {
+        return;
+    }
+    let ph = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "UPDATE scan_job SET status = 'canceled', finished_at = ? \
+         WHERE id IN ({ph}) AND status = 'pending'"
+    );
+    let mut q = sqlx::query(&sql).bind(crate::emby::format_time_now());
+    for id in ids {
+        q = q.bind(id);
+    }
+    let _ = q.execute(db.pool()).await;
+}

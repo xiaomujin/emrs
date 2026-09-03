@@ -17,6 +17,7 @@ use serde_json::json;
 
 use emrs_core::db::Db;
 use emrs_core::importer::stages::ScanStage;
+use emrs_core::stores::scan_job_store;
 use emrs_core::job::JobStatus;
 
 use crate::state::AppState;
@@ -34,13 +35,6 @@ async fn library_roots(st: &AppState) -> Vec<PathBuf> {
         .await
         .unwrap_or_default();
     rows.into_iter().map(PathBuf::from).collect()
-}
-
-/// `id IN (?, ?, ...)` 占位符串。
-fn placeholders(n: usize) -> String {
-    std::iter::repeat_n("?", n.max(1))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// POST /admin/library/scan/start：入队异步扫描（scan_job 化），返回 job id。
@@ -121,22 +115,7 @@ pub(super) async fn start_scan(
     let jobs = st.jobs.clone();
 
     let job_id = st.jobs.spawn("scan", move |job_id| async move {
-        let ph = placeholders(job_rows.len());
-        let select_sql = format!(
-            "SELECT status, COALESCE(added_items, 0), COALESCE(updated_items, 0) \
-             FROM scan_job WHERE id IN ({ph})"
-        );
-        let cancel_sql = format!(
-            "UPDATE scan_job SET status = 'canceled', finished_at = ? \
-             WHERE id IN ({ph}) AND status = 'pending'"
-        );
-        let poll_rows = || async {
-            let mut q = sqlx::query_as::<_, (String, i64, i64)>(&select_sql);
-            for id in &job_rows {
-                q = q.bind(id);
-            }
-            q.fetch_all(db.pool()).await.unwrap_or_default()
-        };
+        let poll_rows = || async { scan_job_store::poll_status_batch(&db, &job_rows).await };
 
         let mut canceled = false;
         loop {
@@ -150,11 +129,7 @@ pub(super) async fn start_scan(
             }
             if jobs.is_cancelled(&job_id) {
                 // 协作式取消：撤销尚未开跑的行；running 行由流水线跑完（粒度同旧实现）
-                let mut q = sqlx::query(&cancel_sql).bind(crate::emby::format_time_now());
-                for id in &job_rows {
-                    q = q.bind(id);
-                }
-                let _ = q.execute(db.pool()).await;
+                scan_job_store::cancel_pending_batch(&db, &job_rows).await;
                 canceled = true;
                 break;
             }
