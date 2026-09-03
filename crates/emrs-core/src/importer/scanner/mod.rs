@@ -867,57 +867,9 @@ impl Scanner {
         tokio::time::sleep(std::time::Duration::from_millis(self.yield_ms)).await;
     }
 
-    /// 创建或获取 library + library_path 记录。
+    /// 创建或获取 library + library_path 记录。委托 [`crate::stores::library_store`]。
     async fn upsert_library(&self, name: &str, path: &str) -> Result<i64> {
-        let now = crate::emby::format_time_now();
-
-        // 先按 library_path.path 查 library_path，找到则取 library_id。
-        // 命中已存在库时**不改名**——库名由 admin 建库时用户指定，扫描只负责入库条目，
-        // 绝不能用文件夹 basename 覆盖用户设定的库名。
-        let existing_lib_id: Option<i64> =
-            sqlx::query_scalar("SELECT library_id FROM library_path WHERE path = ? LIMIT 1")
-                .bind(path)
-                .fetch_optional(self.db.pool())
-                .await?;
-
-        if let Some(lib_id) = existing_lib_id {
-            return Ok(lib_id);
-        }
-
-        // 新建 library（首次扫描该路径：CLI / watch / 手输路径，用文件夹名兜底命名）
-        {
-            sqlx::query("INSERT INTO library (name, created_at, updated_at) VALUES (?, ?, ?)")
-                .bind(name)
-                .bind(&now)
-                .bind(&now)
-                .execute(self.db.pool())
-                .await?;
-
-            let lib_id =
-                sqlx::query_scalar::<_, i64>("SELECT id FROM library ORDER BY id DESC LIMIT 1")
-                    .fetch_one(self.db.pool())
-                    .await?;
-
-            // 新建 library_path
-            let path_type = if path.starts_with("http://") || path.starts_with("https://") {
-                "strm"
-            } else {
-                "local"
-            };
-            sqlx::query(
-                "INSERT INTO library_path (library_id, path, path_type, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(lib_id)
-            .bind(path)
-            .bind(path_type)
-            .bind(&now)
-            .bind(&now)
-            .execute(self.db.pool())
-            .await?;
-
-            Ok(lib_id)
-        }
+        crate::stores::library_store::get_or_create_by_path(&self.db, name, path).await
     }
 
     /// 创建或获取 item 记录（type=movie/series/season/episode，parent_id 自引用树）。
