@@ -158,6 +158,17 @@ impl Db {
             .context("统计表数量失败")?;
         Ok(n)
     }
+
+    /// 主动 WAL checkpoint（TRUNCATE）：把 WAL 文件内容刷回主库并截断，
+    /// 防长扫描/探测/删除期间 WAL 无界增长。best-effort：仅 sqlite 有意义，
+    /// 其它方言执行会失败，调用方以 `let _ =` 忽略（与原 importer 内联 `PRAGMA` 语义一致）。
+    pub async fn checkpoint_truncate(&self) -> Result<()> {
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await
+            .context("wal_checkpoint 失败")?;
+        Ok(())
+    }
 }
 
 /// 分区表名列表（PG/MySQL 共用）。

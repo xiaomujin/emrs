@@ -212,9 +212,7 @@ impl Pipeline {
             if total > 0 {
                 // 收尾 checkpoint：把本轮探测写入的 WAL 刷回主库并截断，
                 // 避免长扫描 + 探测期间 WAL 文件无界增长。
-                let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-                    .execute(self.db.pool())
-                    .await;
+                let _ = self.db.checkpoint_truncate().await;
                 info!(total, ok, failed, "probe 阶段处理完成");
             }
         }
@@ -324,9 +322,7 @@ impl Pipeline {
 
         // 删除检测逐行 autocommit DELETE，收尾主动 checkpoint 把 WAL 刷回主库并截断。
         if count > 0 {
-            let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-                .execute(self.db.pool())
-                .await;
+            let _ = self.db.checkpoint_truncate().await;
         }
 
         Ok(count)

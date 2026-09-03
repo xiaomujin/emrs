@@ -861,9 +861,7 @@ impl Scanner {
             return;
         }
         // checkpoint 失败不致命（WAL 会自行在增长阈值时 checkpoint），忽略错误。
-        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(self.db.pool())
-            .await;
+        let _ = self.db.checkpoint_truncate().await;
         tokio::time::sleep(std::time::Duration::from_millis(self.yield_ms)).await;
     }
 

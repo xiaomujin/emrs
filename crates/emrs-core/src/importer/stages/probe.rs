@@ -108,9 +108,7 @@ impl ProbeStage {
             // 批次之间主动 checkpoint + 让出写锁：探测期间每 chunk 会连续
             // UPDATE media_source，让认证/HTTP 读有机会插队（yield_ms=0 时跳过）。
             if self.yield_ms > 0 {
-                let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-                    .execute(self.db.pool())
-                    .await;
+                let _ = self.db.checkpoint_truncate().await;
                 tokio::time::sleep(std::time::Duration::from_millis(self.yield_ms)).await;
             }
         }
