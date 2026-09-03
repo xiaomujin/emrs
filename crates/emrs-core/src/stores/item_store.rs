@@ -90,6 +90,74 @@ pub async fn reset_stale_scraping(db: &Db) -> Result<u64> {
     Ok(r.rows_affected())
 }
 
+// ---------------------------------------------------------------------------
+// item 链接表写路径（item_genre / item_people / item_studio / item_tag）。
+// 均 `INSERT OR IGNORE`（重复关联跳过），失败静默忽略（语义与迁移前逐字一致）。
+// ---------------------------------------------------------------------------
+
+/// 重抓前清空某 item 的既有 people 关联（失败向上传播，与原 `?` 语义一致）。
+pub async fn clear_item_people(db: &Db, item_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM item_people WHERE item_id = ?")
+        .bind(item_id)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
+/// 幂等关联 item → genre。
+pub async fn link_genre(db: &Db, item_id: i64, genre_id: i64) {
+    let _ = sqlx::query("INSERT OR IGNORE INTO item_genre (item_id, genre_id) VALUES (?, ?)")
+        .bind(item_id)
+        .bind(genre_id)
+        .execute(db.pool())
+        .await;
+}
+
+/// 幂等关联 item → studio（带排序）。
+pub async fn link_studio(db: &Db, item_id: i64, studio_id: i64, sort_order: i64) {
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO item_studio (item_id, studio_id, sort_order) VALUES (?, ?, ?)",
+    )
+    .bind(item_id)
+    .bind(studio_id)
+    .bind(sort_order)
+    .execute(db.pool())
+    .await;
+}
+
+/// 幂等关联 item → tag（带排序）。
+pub async fn link_tag(db: &Db, item_id: i64, tag_id: i64, sort_order: i64) {
+    let _ = sqlx::query("INSERT OR IGNORE INTO item_tag (item_id, tag_id, sort_order) VALUES (?, ?, ?)")
+        .bind(item_id)
+        .bind(tag_id)
+        .bind(sort_order)
+        .execute(db.pool())
+        .await;
+}
+
+/// 幂等关联 item → person。`role` / `character_name` 由调用方决定（cast：role="Actor"、
+/// character=角色名；crew：role=映射角色、character=None）。
+pub async fn link_person(
+    db: &Db,
+    item_id: i64,
+    people_id: i64,
+    role: &str,
+    character: Option<&str>,
+    sort_order: i64,
+) {
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO item_people (item_id, people_id, role, character_name, sort_order) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(item_id)
+    .bind(people_id)
+    .bind(role)
+    .bind(character)
+    .bind(sort_order)
+    .execute(db.pool())
+    .await;
+}
+
 
 /// Movie/Series 列（无 media_source JOIN，folder 项不带媒体源）。
 const FOLDER_COLS: &str = "i.id, i.library_id AS library_id, \

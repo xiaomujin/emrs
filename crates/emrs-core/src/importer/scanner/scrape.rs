@@ -12,6 +12,7 @@ use anyhow::Result;
 use tracing::info;
 
 use crate::importer::nfo::Nfo;
+use crate::stores::item_store;
 use crate::stores::taxonomy_store;
 use crate::importer::tmdb::{
     Credits, EpisodeBrief, MovieDetail, SeasonBrief, TmdbMovie, TmdbScraper, TmdbTv, TvDetail,
@@ -632,10 +633,7 @@ impl Scanner {
         }
 
         let now = crate::emby::format_time_now();
-        sqlx::query("DELETE FROM item_people WHERE item_id = ?")
-            .bind(episode_id)
-            .execute(self.db.pool())
-            .await?;
+        item_store::clear_item_people(&self.db, episode_id).await?;
 
         let mut sort_order: i64 = 0;
         for c in credits
@@ -658,15 +656,14 @@ impl Scanner {
                 self.attach_image_for("people", people_id, "primary", &url)
                     .await;
             }
-            let _ = sqlx::query(
-                "INSERT OR IGNORE INTO item_people (item_id, people_id, role, character_name, sort_order) \
-                 VALUES (?, ?, 'Actor', ?, ?)",
+            item_store::link_person(
+                &self.db,
+                episode_id,
+                people_id,
+                "Actor",
+                c.character.as_deref(),
+                sort_order,
             )
-            .bind(episode_id)
-            .bind(people_id)
-            .bind(c.character.as_deref())
-            .bind(sort_order)
-            .execute(self.db.pool())
             .await;
             sort_order += 1;
         }
@@ -937,16 +934,12 @@ impl Scanner {
         taxonomy_store::upsert_named(&self.db, "genre", tmdb_id, name, &now).await
     }
 
-    /// 关联 item → genre（item_genre 幂等，重复关联跳过）。
+    /// 关联 item → genre（item_genre 幂等，重复关联跳过）。委托 [`item_store`]。
     async fn link_genre(&self, item_id: i64, genre_id: i64) {
         if genre_id <= 0 {
             return;
         }
-        let _ = sqlx::query("INSERT OR IGNORE INTO item_genre (item_id, genre_id) VALUES (?, ?)")
-            .bind(item_id)
-            .bind(genre_id)
-            .execute(self.db.pool())
-            .await;
+        item_store::link_genre(&self.db, item_id, genre_id).await;
     }
 
     /// 把 TMDB production_companies 写入 `studio` 规范表 + `item_studio` 关联
@@ -959,14 +952,7 @@ impl Scanner {
             if studio_id <= 0 {
                 continue;
             }
-            let _ = sqlx::query(
-                "INSERT OR IGNORE INTO item_studio (item_id, studio_id, sort_order) VALUES (?, ?, ?)",
-            )
-            .bind(item_id)
-            .bind(studio_id)
-            .bind(sort_order)
-            .execute(self.db.pool())
-            .await;
+            item_store::link_studio(&self.db, item_id, studio_id, sort_order).await;
             sort_order += 1;
         }
     }
@@ -989,14 +975,7 @@ impl Scanner {
             if tag_id <= 0 {
                 continue;
             }
-            let _ = sqlx::query(
-                "INSERT OR IGNORE INTO item_tag (item_id, tag_id, sort_order) VALUES (?, ?, ?)",
-            )
-            .bind(item_id)
-            .bind(tag_id)
-            .bind(sort_order)
-            .execute(self.db.pool())
-            .await;
+            item_store::link_tag(&self.db, item_id, tag_id, sort_order).await;
             sort_order += 1;
         }
     }
@@ -1029,15 +1008,14 @@ impl Scanner {
                 self.attach_image_for("people", people_id, "primary", &url)
                     .await;
             }
-            let _ = sqlx::query(
-                "INSERT OR IGNORE INTO item_people (item_id, people_id, role, character_name, sort_order) \
-                 VALUES (?, ?, 'Actor', ?, ?)",
+            item_store::link_person(
+                &self.db,
+                item_id,
+                people_id,
+                "Actor",
+                c.character.as_deref(),
+                sort_order,
             )
-            .bind(item_id)
-            .bind(people_id)
-            .bind(c.character.as_deref())
-            .bind(sort_order)
-            .execute(self.db.pool())
             .await;
             sort_order += 1;
         }
@@ -1061,16 +1039,7 @@ impl Scanner {
                 self.attach_image_for("people", people_id, "primary", &url)
                     .await;
             }
-            let _ = sqlx::query(
-                "INSERT OR IGNORE INTO item_people (item_id, people_id, role, character_name, sort_order) \
-                 VALUES (?, ?, ?, NULL, ?)",
-            )
-            .bind(item_id)
-            .bind(people_id)
-            .bind(&role)
-            .bind(sort_order)
-            .execute(self.db.pool())
-            .await;
+            item_store::link_person(&self.db, item_id, people_id, &role, None, sort_order).await;
             sort_order += 1;
         }
     }
@@ -1183,14 +1152,7 @@ impl Scanner {
             }
             let sid = self.upsert_studio_by_name(s).await;
             if sid > 0 {
-                let _ = sqlx::query(
-                    "INSERT OR IGNORE INTO item_studio (item_id, studio_id, sort_order) VALUES (?, ?, ?)",
-                )
-                .bind(item_id)
-                .bind(sid)
-                .bind(sort_order)
-                .execute(self.db.pool())
-                .await;
+                item_store::link_studio(&self.db, item_id, sid, sort_order).await;
                 sort_order += 1;
             }
         }
@@ -1202,14 +1164,7 @@ impl Scanner {
             }
             let tid = self.upsert_tag_by_name(t).await;
             if tid > 0 {
-                let _ = sqlx::query(
-                    "INSERT OR IGNORE INTO item_tag (item_id, tag_id, sort_order) VALUES (?, ?, ?)",
-                )
-                .bind(item_id)
-                .bind(tid)
-                .bind(sort_order)
-                .execute(self.db.pool())
-                .await;
+                item_store::link_tag(&self.db, item_id, tid, sort_order).await;
                 sort_order += 1;
             }
         }
@@ -1226,15 +1181,14 @@ impl Scanner {
             if people_id <= 0 {
                 continue;
             }
-            let _ = sqlx::query(
-                "INSERT OR IGNORE INTO item_people (item_id, people_id, role, character_name, sort_order) \
-                 VALUES (?, ?, 'Actor', ?, ?)",
+            item_store::link_person(
+                &self.db,
+                item_id,
+                people_id,
+                "Actor",
+                a.role.as_deref(),
+                sort_order,
             )
-            .bind(item_id)
-            .bind(people_id)
-            .bind(a.role.as_deref())
-            .bind(sort_order)
-            .execute(self.db.pool())
             .await;
             sort_order += 1;
             if let Some(thumb) = a.thumb.as_deref() {
