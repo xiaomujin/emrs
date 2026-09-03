@@ -9,6 +9,84 @@ use std::collections::{HashMap, HashSet};
 use super::{ItemRow, ItemsResult};
 use crate::db::Db;
 
+/// 规范命名表（genre / studio / tag）按 `tmdb_id` 幂等 upsert，返回行 id。
+///
+/// 三表结构一致：`(id, tmdb_id, name, created_at, updated_at)`。命中已存在则同步
+/// `name`/`updated_at`；否则插入后取回自增 id。任一步失败返回 `0`（调用方按 0 跳过关联），
+/// 语义与迁移前 scanner 内的 `upsert_genre/studio/tag` 逐字一致。
+///
+/// `table` 为调用方传入的固定字面量（`"genre"|"studio"|"tag"`），非用户输入。
+/// 本表写路径的唯一属主（I1）。
+pub async fn upsert_named(
+    db: &Db,
+    table: &'static str,
+    tmdb_id: &str,
+    name: &str,
+    now: &str,
+) -> i64 {
+    let existing: Option<i64> =
+        sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE tmdb_id = ? LIMIT 1"))
+            .bind(tmdb_id)
+            .fetch_optional(db.pool())
+            .await
+            .ok()
+            .flatten();
+    if let Some(id) = existing {
+        let _ = sqlx::query(&format!(
+            "UPDATE {table} SET name = ?, updated_at = ? WHERE id = ?"
+        ))
+        .bind(name)
+        .bind(now)
+        .bind(id)
+        .execute(db.pool())
+        .await;
+        return id;
+    }
+    let _ = sqlx::query(&format!(
+        "INSERT INTO {table} (tmdb_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)"
+    ))
+    .bind(tmdb_id)
+    .bind(name)
+    .bind(now)
+    .bind(now)
+    .execute(db.pool())
+    .await;
+    sqlx::query_scalar::<_, i64>(&format!("SELECT id FROM {table} ORDER BY id DESC LIMIT 1"))
+        .fetch_one(db.pool())
+        .await
+        .unwrap_or(0)
+}
+
+/// 规范命名表（genre / studio / tag）按 `name` 幂等 upsert，返回行 id。
+///
+/// 命中同名直接返回其 id（不覆盖），否则插入 `(name, created_at, updated_at)` 后取回自增 id。
+/// 用于无 tmdb_id 的按名归类（NFO / 手动识别）。`table` 为固定字面量。
+pub async fn upsert_by_name(db: &Db, table: &'static str, name: &str) -> i64 {
+    let now = crate::emby::format_time_now();
+    let existing: Option<i64> =
+        sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE name = ? LIMIT 1"))
+            .bind(name)
+            .fetch_optional(db.pool())
+            .await
+            .ok()
+            .flatten();
+    if let Some(id) = existing {
+        return id;
+    }
+    let _ = sqlx::query(&format!(
+        "INSERT INTO {table} (name, created_at, updated_at) VALUES (?, ?, ?)"
+    ))
+    .bind(name)
+    .bind(&now)
+    .bind(&now)
+    .execute(db.pool())
+    .await;
+    sqlx::query_scalar::<_, i64>(&format!("SELECT id FROM {table} ORDER BY id DESC LIMIT 1"))
+        .fetch_one(db.pool())
+        .await
+        .unwrap_or(0)
+}
+
 /// 单个人物 brief（Emby `People` 数组元素）。
 #[derive(Debug, Clone)]
 pub struct PersonBrief {

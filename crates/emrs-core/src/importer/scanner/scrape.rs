@@ -12,6 +12,7 @@ use anyhow::Result;
 use tracing::info;
 
 use crate::importer::nfo::Nfo;
+use crate::stores::taxonomy_store;
 use crate::importer::tmdb::{
     Credits, EpisodeBrief, MovieDetail, SeasonBrief, TmdbMovie, TmdbScraper, TmdbTv, TvDetail,
     best_logo, extract_year,
@@ -930,39 +931,10 @@ impl Scanner {
         )
     }
 
-    /// upsert genre 规范行（按 tmdb_id 幂等），返回 genre.id。
-    /// 已存在则只同步 name；不存在则插入。失败返回 0（调用方忽略）。
+    /// upsert genre 规范行（按 tmdb_id 幂等），返回 genre.id。委托 [`taxonomy_store`]。
     async fn upsert_genre(&self, tmdb_id: &str, name: &str) -> i64 {
         let now = crate::emby::format_time_now();
-        let existing: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM genre WHERE tmdb_id = ? LIMIT 1")
-                .bind(tmdb_id)
-                .fetch_optional(self.db.pool())
-                .await
-                .ok()
-                .flatten();
-        if let Some(id) = existing {
-            let _ = sqlx::query("UPDATE genre SET name = ?, updated_at = ? WHERE id = ?")
-                .bind(name)
-                .bind(&now)
-                .bind(id)
-                .execute(self.db.pool())
-                .await;
-            return id;
-        }
-        let _ = sqlx::query(
-            "INSERT INTO genre (tmdb_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(tmdb_id)
-        .bind(name)
-        .bind(&now)
-        .bind(&now)
-        .execute(self.db.pool())
-        .await;
-        sqlx::query_scalar::<_, i64>("SELECT id FROM genre ORDER BY id DESC LIMIT 1")
-            .fetch_one(self.db.pool())
-            .await
-            .unwrap_or(0)
+        taxonomy_store::upsert_named(&self.db, "genre", tmdb_id, name, &now).await
     }
 
     /// 关联 item → genre（item_genre 幂等，重复关联跳过）。
@@ -999,39 +971,9 @@ impl Scanner {
         }
     }
 
-    /// upsert studio 规范行（按 tmdb_id 幂等），返回 studio.id。
-    /// 已存在则同步 name；不存在则插入。失败返回 0（调用方忽略）。
+    /// upsert studio 规范行（按 tmdb_id 幂等），返回 studio.id。委托 [`taxonomy_store`]。
     async fn upsert_studio(&self, tmdb_id: i64, name: &str, now: &str) -> i64 {
-        let tmdb_id_str = tmdb_id.to_string();
-        let existing: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM studio WHERE tmdb_id = ? LIMIT 1")
-                .bind(&tmdb_id_str)
-                .fetch_optional(self.db.pool())
-                .await
-                .ok()
-                .flatten();
-        if let Some(id) = existing {
-            let _ = sqlx::query("UPDATE studio SET name = ?, updated_at = ? WHERE id = ?")
-                .bind(name)
-                .bind(now)
-                .bind(id)
-                .execute(self.db.pool())
-                .await;
-            return id;
-        }
-        let _ = sqlx::query(
-            "INSERT INTO studio (tmdb_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&tmdb_id_str)
-        .bind(name)
-        .bind(now)
-        .bind(now)
-        .execute(self.db.pool())
-        .await;
-        sqlx::query_scalar::<_, i64>("SELECT id FROM studio ORDER BY id DESC LIMIT 1")
-            .fetch_one(self.db.pool())
-            .await
-            .unwrap_or(0)
+        taxonomy_store::upsert_named(&self.db, "studio", &tmdb_id.to_string(), name, now).await
     }
 
     /// 把 TMDB keywords 写入 `tag` 规范表 + `item_tag` 关联
@@ -1062,36 +1004,7 @@ impl Scanner {
     /// upsert tag 规范行（按 tmdb_id 幂等），返回 tag.id。
     /// 已存在则同步 name；不存在则插入。失败返回 0（调用方忽略）。
     async fn upsert_tag(&self, tmdb_id: i64, name: &str, now: &str) -> i64 {
-        let tmdb_id_str = tmdb_id.to_string();
-        let existing: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM tag WHERE tmdb_id = ? LIMIT 1")
-                .bind(&tmdb_id_str)
-                .fetch_optional(self.db.pool())
-                .await
-                .ok()
-                .flatten();
-        if let Some(id) = existing {
-            let _ = sqlx::query("UPDATE tag SET name = ?, updated_at = ? WHERE id = ?")
-                .bind(name)
-                .bind(now)
-                .bind(id)
-                .execute(self.db.pool())
-                .await;
-            return id;
-        }
-        let _ = sqlx::query(
-            "INSERT INTO tag (tmdb_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&tmdb_id_str)
-        .bind(name)
-        .bind(now)
-        .bind(now)
-        .execute(self.db.pool())
-        .await;
-        sqlx::query_scalar::<_, i64>("SELECT id FROM tag ORDER BY id DESC LIMIT 1")
-            .fetch_one(self.db.pool())
-            .await
-            .unwrap_or(0)
+        taxonomy_store::upsert_named(&self.db, "tag", &tmdb_id.to_string(), name, now).await
     }
 
     /// 把 TMDB credits（cast + crew）写入 people / item_people。
@@ -1352,31 +1265,9 @@ impl Scanner {
     }
 
     /// genre / studio / tag 三表结构相同（id, tmdb_id, name），共用按 name 的 upsert。
-    /// `table` 仅接受字面量 "genre"|"studio"|"tag"（无注入风险）。
+    /// `table` 仅接受字面量 "genre"|"studio"|"tag"（无注入风险）。委托 [`taxonomy_store`]。
     async fn upsert_taxonomy_by_name(&self, table: &'static str, name: &str) -> i64 {
-        let now = crate::emby::format_time_now();
-        let existing: Option<i64> =
-            sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE name = ? LIMIT 1"))
-                .bind(name)
-                .fetch_optional(self.db.pool())
-                .await
-                .ok()
-                .flatten();
-        if let Some(id) = existing {
-            return id;
-        }
-        let _ = sqlx::query(&format!(
-            "INSERT INTO {table} (name, created_at, updated_at) VALUES (?, ?, ?)"
-        ))
-        .bind(name)
-        .bind(&now)
-        .bind(&now)
-        .execute(self.db.pool())
-        .await;
-        sqlx::query_scalar::<_, i64>(&format!("SELECT id FROM {table} ORDER BY id DESC LIMIT 1"))
-            .fetch_one(self.db.pool())
-            .await
-            .unwrap_or(0)
+        taxonomy_store::upsert_by_name(&self.db, table, name).await
     }
 }
 
