@@ -22,6 +22,7 @@ use tracing::{info, warn};
 use crate::config::PipelineConfig;
 use crate::db::Db;
 use crate::http_client::Outbound;
+use crate::stores::item_store;
 
 use super::stages::{ProbeStage, ScanStage, ScrapeStage};
 
@@ -67,20 +68,12 @@ impl Pipeline {
             return;
         }
 
-        // 崩溃恢复：上次进程退出时滞留在 scraping 的条目复位为 pending
+        // 崩溃恢复：上次进程退出时滞留在 scraping 的条目复位为 pending（委托 item_store）
         let db = self.db.clone();
         tokio::spawn(async move {
-            match sqlx::query(
-                "UPDATE item SET scrape_status = 'pending' WHERE scrape_status = 'scraping'",
-            )
-            .execute(db.pool())
-            .await
-            {
-                Ok(r) if r.rows_affected() > 0 => {
-                    info!(
-                        count = r.rows_affected(),
-                        "启动清扫：scraping 条目复位为 pending"
-                    );
+            match item_store::reset_stale_scraping(&db).await {
+                Ok(count) if count > 0 => {
+                    info!(count, "启动清扫：scraping 条目复位为 pending");
                 }
                 Ok(_) => {}
                 Err(e) => warn!(error = %e, "启动清扫失败"),

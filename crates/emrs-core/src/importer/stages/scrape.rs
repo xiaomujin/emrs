@@ -18,6 +18,7 @@ use tracing::{info, warn};
 
 use crate::db::Db;
 use crate::http_client::Outbound;
+use crate::stores::item_store;
 
 use crate::importer::scanner::{Scanner, ScrapeOutcome, ScrapeStats};
 
@@ -54,17 +55,8 @@ impl ScrapeStage {
     /// 消费一批 pending 条目（series 优先于 movie；子级从不入队）。
     pub async fn run_pending(&self, batch_size: i64) -> ScrapeStats {
         let mut stats = ScrapeStats::default();
-        // ORDER BY CASE 兼容三方言，series 排前保证"先父后子"
-        let rows = sqlx::query_as::<_, (i64, String, String, Option<String>, Option<String>, i64)>(
-            "SELECT id, title, type, date_air, tmdb_id, COALESCE(scrape_attempts, 0) FROM item \
-             WHERE scrape_status = 'pending' \
-             AND type IN ('movie', 'series') \
-             ORDER BY CASE type WHEN 'series' THEN 0 ELSE 1 END, id LIMIT ?",
-        )
-        .bind(batch_size)
-        .fetch_all(self.db.pool())
-        .await
-        .unwrap_or_default();
+        // 领取 pending 批次（series 优先），委托 item_store（scrape 写路径属主）。
+        let rows = item_store::claim_pending_scrape(&self.db, batch_size).await;
 
         for (id, title, item_type, date_air, tmdb_id_raw, attempt_no) in rows {
             // 取件打标：处理中（进程崩溃后由启动清扫复位回 pending）
@@ -116,13 +108,7 @@ impl ScrapeStage {
                     // 正常流程不会出现（key 守卫/快路径已分流）；稳妥回 pending 防滞留
                     stats.skipped += 1;
                     warn!(item_id = id, "scrape 返回 Skipped，复位 pending");
-                    let _ = sqlx::query(
-                        "UPDATE item SET scrape_status = 'pending', updated_at = ? WHERE id = ?",
-                    )
-                    .bind(crate::emby::format_time_now())
-                    .bind(id)
-                    .execute(self.db.pool())
-                    .await;
+                    item_store::set_scrape_status(&self.db, id, "pending").await;
                 }
                 ScrapeOutcome::NotFound => {
                     // 业务性无匹配：终态 none，条目保留基础信息照常可见可播
@@ -135,13 +121,7 @@ impl ScrapeStage {
                         duration_ms,
                         "TMDB 未找到匹配"
                     );
-                    let _ = sqlx::query(
-                        "UPDATE item SET scrape_status = 'none', updated_at = ? WHERE id = ?",
-                    )
-                    .bind(crate::emby::format_time_now())
-                    .bind(id)
-                    .execute(self.db.pool())
-                    .await;
+                    item_store::set_scrape_status(&self.db, id, "none").await;
                     if !is_movie {
                         self.cascade_children(id, "none").await;
                     }
@@ -152,15 +132,7 @@ impl ScrapeStage {
                     let reached_limit =
                         u64::try_from(attempt_no).unwrap_or(0) + 1 >= self.retry_max_attempts;
                     let next = if reached_limit { "failed" } else { "pending" };
-                    let _ = sqlx::query(
-                        "UPDATE item SET scrape_attempts = scrape_attempts + 1, \
-                         scrape_status = ?, updated_at = ? WHERE id = ?",
-                    )
-                    .bind(next)
-                    .bind(crate::emby::format_time_now())
-                    .bind(id)
-                    .execute(self.db.pool())
-                    .await;
+                    item_store::bump_scrape_attempt(&self.db, id, next).await;
                     stats.failed += 1;
                     warn!(
                         item_id = id,
@@ -180,37 +152,13 @@ impl ScrapeStage {
         stats
     }
 
-    /// 取件即置处理中。
+    /// 取件即置处理中（委托 [`item_store::set_scrape_status`]）。
     async fn mark_scraping(&self, item_id: i64) {
-        let _ =
-            sqlx::query("UPDATE item SET scrape_status = 'scraping', updated_at = ? WHERE id = ?")
-                .bind(crate::emby::format_time_now())
-                .bind(item_id)
-                .execute(self.db.pool())
-                .await;
+        item_store::set_scrape_status(&self.db, item_id, "scraping").await;
     }
 
-    /// 把 series 的直属 season 与 episode 批量置为给定状态（两级，任意方言安全的子查询写法）。
+    /// 把 series 的直属 season 与 episode 批量置为给定状态（委托 [`item_store::cascade_scrape_status`]）。
     async fn cascade_children(&self, series_id: i64, status: &str) {
-        let now = crate::emby::format_time_now();
-        let _ = sqlx::query(
-            "UPDATE item SET scrape_status = ?, updated_at = ? \
-             WHERE parent_id = ? AND type = 'season'",
-        )
-        .bind(status)
-        .bind(&now)
-        .bind(series_id)
-        .execute(self.db.pool())
-        .await;
-        let _ = sqlx::query(
-            "UPDATE item SET scrape_status = ?, updated_at = ? \
-             WHERE type = 'episode' AND parent_id IN \
-             (SELECT id FROM item WHERE parent_id = ? AND type = 'season')",
-        )
-        .bind(status)
-        .bind(&now)
-        .bind(series_id)
-        .execute(self.db.pool())
-        .await;
+        item_store::cascade_scrape_status(&self.db, series_id, status).await;
     }
 }

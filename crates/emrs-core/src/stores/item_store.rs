@@ -12,6 +12,85 @@ use crate::db::Db;
 
 use std::collections::HashMap;
 
+// ---------------------------------------------------------------------------
+// scrape 状态机：item.scrape_status / scrape_attempts 写路径的唯一属主（I1）。
+// 由 importer 的 Scrape 阶段与 Pipeline 崩溃恢复调用；语义与迁移前逐字一致。
+// ---------------------------------------------------------------------------
+
+/// 领取一批待刮削条目（series 优先于 movie；子级从不入队），带当前尝试次数。
+/// 返回 `(id, title, type, date_air, tmdb_id, attempts)`。
+pub async fn claim_pending_scrape(
+    db: &Db,
+    batch: i64,
+) -> Vec<(i64, String, String, Option<String>, Option<String>, i64)> {
+    sqlx::query_as::<_, (i64, String, String, Option<String>, Option<String>, i64)>(
+        "SELECT id, title, type, date_air, tmdb_id, COALESCE(scrape_attempts, 0) FROM item \
+         WHERE scrape_status = 'pending' \
+         AND type IN ('movie', 'series') \
+         ORDER BY CASE type WHEN 'series' THEN 0 ELSE 1 END, id LIMIT ?",
+    )
+    .bind(batch)
+    .fetch_all(db.pool())
+    .await
+    .unwrap_or_default()
+}
+
+/// 置单个 item 的 scrape 状态（记 `updated_at`）。
+pub async fn set_scrape_status(db: &Db, item_id: i64, status: &str) {
+    let _ = sqlx::query("UPDATE item SET scrape_status = ?, updated_at = ? WHERE id = ?")
+        .bind(status)
+        .bind(crate::emby::format_time_now())
+        .bind(item_id)
+        .execute(db.pool())
+        .await;
+}
+
+/// `scrape_attempts + 1` 并置状态（异常退避保持 pending / 达上限转 failed）。
+pub async fn bump_scrape_attempt(db: &Db, item_id: i64, status: &str) {
+    let _ = sqlx::query(
+        "UPDATE item SET scrape_attempts = scrape_attempts + 1, \
+         scrape_status = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(status)
+    .bind(crate::emby::format_time_now())
+    .bind(item_id)
+    .execute(db.pool())
+    .await;
+}
+
+/// 把 series 的直属 season 与其下 episode 批量置为给定状态（两级，方言安全子查询）。
+pub async fn cascade_scrape_status(db: &Db, series_id: i64, status: &str) {
+    let now = crate::emby::format_time_now();
+    let _ = sqlx::query(
+        "UPDATE item SET scrape_status = ?, updated_at = ? WHERE parent_id = ? AND type = 'season'",
+    )
+    .bind(status)
+    .bind(&now)
+    .bind(series_id)
+    .execute(db.pool())
+    .await;
+    let _ = sqlx::query(
+        "UPDATE item SET scrape_status = ?, updated_at = ? \
+         WHERE type = 'episode' AND parent_id IN \
+         (SELECT id FROM item WHERE parent_id = ? AND type = 'season')",
+    )
+    .bind(status)
+    .bind(&now)
+    .bind(series_id)
+    .execute(db.pool())
+    .await;
+}
+
+/// 崩溃恢复：把残留 `scraping` 全部复位为 `pending`，返回受影响行数。
+pub async fn reset_stale_scraping(db: &Db) -> Result<u64> {
+    let r =
+        sqlx::query("UPDATE item SET scrape_status = 'pending' WHERE scrape_status = 'scraping'")
+            .execute(db.pool())
+            .await?;
+    Ok(r.rows_affected())
+}
+
+
 /// Movie/Series 列（无 media_source JOIN，folder 项不带媒体源）。
 const FOLDER_COLS: &str = "i.id, i.library_id AS library_id, \
     CASE i.type WHEN 'movie' THEN 'Movie' WHEN 'series' THEN 'Series' \
