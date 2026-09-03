@@ -10,9 +10,9 @@ use crate::emby::{
     attach_media_sources, item_to_json,
 };
 use emrs_core::auth::AuthContext;
-use emrs_core::stores::image_store::ImageTypeIds;
-use emrs_core::stores::taxonomy_store::ItemTaxonomy;
-use emrs_core::stores::{ItemRow, ItemsStore, ResumeEntry};
+use emrs_infra::stores::image_store::ImageTypeIds;
+use emrs_infra::stores::taxonomy_store::ItemTaxonomy;
+use emrs_infra::stores::{ItemRow, ItemsStore, ResumeEntry};
 
 use super::{
     ItemsQuery, SeasonQuery, parse_generic_id, parse_genre_ids, parse_id, parse_item_ids,
@@ -279,7 +279,7 @@ pub(super) async fn users_items(
         .any(|t| t.eq_ignore_ascii_case("BoxSet"))
     {
         // BoxSet 合集：本实现无合集概念，返回空（避免误落到 movie 分支返回全部电影）
-        Ok(emrs_core::stores::ItemsResult {
+        Ok(emrs_infra::stores::ItemsResult {
             items: vec![],
             total: 0,
         })

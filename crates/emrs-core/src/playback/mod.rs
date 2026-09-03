@@ -1,10 +1,11 @@
-//! 播放后端：Redirect / Proxy / Ticket 三策略。
+//! 播放后端：直链解析（PlaybackRouter）+ Ticket 短票据。
 //!
-//! - `RedirectBackend`：调 driver 签发直链 → 302 Location
-//! - `ProxyBackend`：reqwest Range 转发，零拷贝
-//! - `TicketBackend`：短票据（jwt）自校验播放
+//! - `PlaybackRouter::resolve_direct`：调 driver 签发直链（Cache 加速）→ 302 Location
+//! - `ticket`：短票据（jwt）自校验播放
+//!
+//! `PlaybackRouter`（直链解析 + 缓存）在 core（仅依赖 Cache/Driver trait）；
+//! 磁盘块缓存 [`block_cache`](emrs_infra::block_cache) 是文件 IO，属 emrs-infra。
 
-pub mod block_cache;
 pub mod redirect;
 pub mod ticket;
 
@@ -85,58 +86,5 @@ fn direct_cache_key(r: &CloudRef) -> String {
     format!("direct:{}:{}", r.path_type, r.path_url)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cache::MemoryCache;
-    use std::sync::Arc as StdArc;
-
-    fn cloud_ref(path_type: &str, path_url: &str) -> CloudRef {
-        CloudRef {
-            path_type: path_type.to_string(),
-            path_url: path_url.to_string(),
-        }
-    }
-
-    /// 测试用临时 sqlite 库 + 默认配置（DriverRegistry 构造需要）。
-    async fn test_registry() -> StdArc<DriverRegistry> {
-        let dir = tempfile::tempdir().unwrap().keep();
-        let dsn = format!(
-            "sqlite:{}?mode=rwc",
-            dir.join("t.db").to_string_lossy().replace('\\', "/")
-        );
-        let db = crate::db::Db::connect(&crate::config::StorageConfig {
-            dsn,
-            max_connections: 2,
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
-        StdArc::new(DriverRegistry::new(
-            StdArc::new(db),
-            StdArc::new(crate::config::Config::default()),
-        ))
-    }
-
-    #[tokio::test]
-    async fn direct_url_cached() {
-        let cache: Arc<dyn Cache> = StdArc::new(MemoryCache::new());
-        let router = PlaybackRouter::new(test_registry().await, cache.clone());
-        let req = PlayRequest {
-            cloud_ref: cloud_ref("url", "https://cdn.example.com/a.mp4"),
-            user_id: 1,
-            device_id: None,
-        };
-
-        let first = router.resolve_direct(&req).await.unwrap().unwrap();
-        assert_eq!(first, "https://cdn.example.com/a.mp4");
-
-        // 缓存写入验证
-        let key = direct_cache_key(&req.cloud_ref);
-        assert_eq!(cache.get(&key).await.as_deref(), Some(first.as_str()));
-
-        // 再次解析：key 已在缓存（driver 无感知）
-        let second = router.resolve_direct(&req).await.unwrap().unwrap();
-        assert_eq!(second, first);
-    }
-}
+// 注：`resolve_direct` 的缓存命中行为测试随实现依赖（MemoryCache / Db /
+// DriverRegistry 构造）迁至 emrs-infra `tests/playback_direct.rs`。

@@ -28,10 +28,10 @@ pub(crate) async fn admin_login(
     }
 
     // 查 user 表（role=admin）
-    match emrs_core::auth::AuthStore::find_user(&st.db, &body.username).await {
+    match emrs_infra::auth_store::AuthStore::find_user(&st.db, &body.username).await {
         Ok(Some(user)) if user.is_admin => {
             if !verify_password(&user.password_hash, &body.password) {
-                let _ = emrs_core::auth::AuthStore::log_login_event(
+                let _ = emrs_infra::auth_store::AuthStore::log_login_event(
                     &st.db,
                     &emrs_core::auth::LoginEvent {
                         user_id: Some(user.id),
@@ -48,15 +48,16 @@ pub(crate) async fn admin_login(
             // 签发 admin auth_token
             let token = random_token(16);
             let device = emrs_core::auth::DeviceInfo::default();
-            if let Err(e) =
-                emrs_core::auth::AuthStore::insert_token(&st.db, &token, user.id, "admin", &device)
-                    .await
+            if let Err(e) = emrs_infra::auth_store::AuthStore::insert_token(
+                &st.db, &token, user.id, "admin", &device,
+            )
+            .await
             {
                 tracing::error!(error = %e, "admin login: insert token failed");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
-            let _ = emrs_core::auth::AuthStore::touch_last_login(&st.db, user.id).await;
-            let _ = emrs_core::auth::AuthStore::log_login_event(
+            let _ = emrs_infra::auth_store::AuthStore::touch_last_login(&st.db, user.id).await;
+            let _ = emrs_infra::auth_store::AuthStore::log_login_event(
                 &st.db,
                 &emrs_core::auth::LoginEvent {
                     user_id: Some(user.id),

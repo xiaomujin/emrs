@@ -5,8 +5,8 @@ use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use crate::emby::ViewsUserData;
-use emrs_core::db::Db;
-use emrs_core::stores::PlaybackStore;
+use emrs_infra::db::Db;
+use emrs_infra::stores::PlaybackStore;
 
 use super::{parse_id, resolve_item_id};
 use crate::state::AppState;
@@ -53,7 +53,7 @@ pub(super) async fn delete_favorite(
 /// 回读失败或无行时退回默认体，保证始终返回对象（Hills 等客户端解析 body 为对象）。
 async fn favorite_response(db: &Db, user_id: i64, item_id: i64) -> Response {
     let body = match PlaybackStore::get_user_data(db, user_id, item_id).await {
-        Ok(Some(d)) => d.to_views_user_data(),
+        Ok(Some(d)) => crate::emby::to_views_user_data(&d),
         _ => ViewsUserData::default(),
     };
     axum::Json(body).into_response()
@@ -117,7 +117,7 @@ pub(super) async fn hide_from_resume(
 /// 回读失败或无行时退回默认体，保证始终返回对象（Hills 等客户端解析 body 为对象）。
 async fn played_response(db: &Db, user_id: i64, target: i64) -> Response {
     let user_data = match PlaybackStore::get_user_data(db, user_id, target).await {
-        Ok(Some(d)) => d.to_views_user_data(),
+        Ok(Some(d)) => crate::emby::to_views_user_data(&d),
         _ => ViewsUserData::default(),
     };
     (StatusCode::OK, axum::Json(user_data)).into_response()

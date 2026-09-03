@@ -3,12 +3,12 @@
 //! 与 `dto.rs`（item → Emby JSON）不同，这里是**类型化**结构体：
 //! 库视图不再关联 `ItemRow`，直接由 `LibraryView` 行 + 固定默认值成型。
 //! [`ViewsUserData`] 类型定义在 `emby-proto`，其存储层转换是 core 的固有方法
-//! [`UserItemData::to_views_user_data`](emrs_core::stores::UserItemData::to_views_user_data)。
+//! [`UserItemData::to_views_user_data`](emrs_infra::stores::UserItemData::to_views_user_data)。
 
 use serde::Serialize;
 
 use super::{BaseItemDto, library_id};
-use emrs_core::stores::LibraryView;
+use emrs_infra::stores::LibraryView;
 
 /// 单个媒体库视图（CollectionFolder）。
 ///

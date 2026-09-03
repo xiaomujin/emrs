@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 
 use crate::emby::PlaybackInfoResponseDto;
 use emrs_core::auth::AuthContext;
-use emrs_core::stores::{ItemsStore, MediaSourceRow};
+use emrs_infra::stores::{ItemsStore, MediaSourceRow};
 
 use super::parse_id;
 use crate::state::AppState;
@@ -135,7 +135,7 @@ fn spawn_strm_probe(st: &AppState, media: &MediaSourceRow) {
         }
     }
 
-    let scanner = emrs_core::importer::Scanner::new(st.db.clone(), String::new());
+    let scanner = emrs_infra::scanner::Scanner::new(st.db.clone(), String::new());
     let timeout = Duration::from_secs(st.cfg.playback.strm_probe_timeout_secs.max(1));
     let url = url.to_string();
     tokio::spawn(async move {

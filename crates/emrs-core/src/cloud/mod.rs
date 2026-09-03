@@ -1,16 +1,12 @@
-//! 网盘 driver：CloudDriver trait + DriverRegistry + 内置驱动。
+//! 网盘 driver：CloudDriver trait + DriverRegistry 骨架。
 //!
 //! 当前仅保留 http 直链（通用 302），其余驱动已移除。
-//! CloudDriver trait / DriverRegistry 骨架保留，供未来接入扩展。
-
-mod http_driver;
+//! 内置驱动实现与默认注册表构造（`build_registry`）在 emrs-infra `cloud` 模块；
+//! 本模块只保留 trait / 注册表骨架，供未来接入扩展。
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-
-use crate::config::Config;
-use crate::db::Db;
 
 /// 网盘引用（media_source 行解析结果）。
 #[derive(Debug, Clone)]
@@ -50,13 +46,19 @@ pub struct DriverRegistry {
     drivers: Vec<Arc<dyn CloudDriver>>,
 }
 
+impl Default for DriverRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DriverRegistry {
-    pub fn new(_db: Arc<Db>, _cfg: Arc<Config>) -> Self {
-        let mut reg = Self {
+    /// 空注册表（driver 由调用方经 [`Self::register`] 注入；
+    /// 内置驱动的默认注册见 emrs-infra `cloud::build_registry`）。
+    pub fn new() -> Self {
+        Self {
             drivers: Vec::new(),
-        };
-        reg.register(Arc::new(http_driver::HttpDriver));
-        reg
+        }
     }
 
     pub fn register(&mut self, driver: Arc<dyn CloudDriver>) {

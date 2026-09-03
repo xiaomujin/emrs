@@ -36,12 +36,12 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use emrs_core::cache::{self, CacheFacade};
-use emrs_core::cloud::DriverRegistry;
 use emrs_core::config::Config;
-use emrs_core::db::Db;
-use emrs_core::importer::pipeline::Pipeline;
+use emrs_infra::cache::{self, CacheFacade};
+use emrs_infra::db::Db;
+use emrs_infra::http_client::{HttpClient, Outbound};
 use emrs_server::{AppState, router};
+use emrs_service::importer::pipeline::Pipeline;
 
 #[derive(Parser)]
 #[command(
@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
 
     // 后台预装 ffmpeg/ffprobe（已安装则跳过；下载可能较慢，不阻塞启动）。
     tokio::task::spawn_blocking(|| {
-        emrs_core::importer::probe::ensure_ffmpeg_binary();
+        emrs_infra::probe::ensure_ffmpeg_binary();
     });
 
     let cli = Cli::parse();
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
     tracing::info!(dialect = ?db.dialect(), "数据库就绪");
 
     // 首次启动自动创建默认管理员
-    match emrs_core::auth::AuthStore::ensure_default_admin(&db).await {
+    match emrs_infra::auth_store::AuthStore::ensure_default_admin(&db).await {
         Ok(Some(password)) => {
             tracing::info!("首次启动：已创建默认管理员 admin，初始密码：{password}（请尽快修改）");
         }
@@ -91,15 +91,15 @@ async fn main() -> Result<()> {
     let cache = cache::new_cache(&cfg.cache)?;
     tracing::info!(backend = cache.name(), "缓存就绪");
 
-    let drivers = Arc::new(DriverRegistry::new(db.clone(), cfg.clone()));
+    let drivers = Arc::new(emrs_infra::cloud::build_registry());
     tracing::info!("driver 注册表就绪");
 
     // 统一出网配置：启动时加载一次 hosts（远程/文件/内联合并）+ 代理，供 TMDB 刮削与图片代理共用。
-    let outbound = emrs_core::http_client::Outbound::from_config(&cfg.http).await;
+    let outbound = Outbound::from_config(&cfg.http).await;
 
-    let http = Arc::new(emrs_core::http_client::HttpClient::new(&outbound));
+    let http = Arc::new(HttpClient::new(&outbound));
 
-    let jobs = Arc::new(emrs_core::job::JobManager::new());
+    let jobs = Arc::new(emrs_service::job::JobManager::new());
     // 元数据分离：watch 只入队 scan_job，需持有流水线引用做即时唤醒，先建后绑
     let pipeline = Arc::new(Pipeline::new(
         db.clone(),
@@ -107,23 +107,23 @@ async fn main() -> Result<()> {
         cfg.tmdb.api_key.clone(),
         outbound,
     ));
-    let watcher = Arc::new(emrs_core::watcher::LibraryWatcher::with_pipeline(
+    let watcher = Arc::new(emrs_infra::watcher::LibraryWatcher::with_waker(
         db.clone(),
         pipeline.clone(),
     ));
-    let block_cache = Arc::new(emrs_core::playback::block_cache::BlockCache::new(
-        emrs_core::playback::block_cache::BlockCacheConfig::default(),
+    let block_cache = Arc::new(emrs_infra::block_cache::BlockCache::new(
+        emrs_infra::block_cache::BlockCacheConfig::default(),
     ));
 
     // 缓存门面（two-tier: moka L2 → redis L1 → DB）
     // L2 = 当前 cache 实例（memory/redis/valkey），L1 = None（单层即满足，多层时按需扩展）
-    let two_tier = Arc::new(emrs_core::cache::TwoTierCache::new(cache.clone(), None));
+    let two_tier = Arc::new(emrs_infra::cache::TwoTierCache::new(cache.clone(), None));
     let cache_facade = Arc::new(CacheFacade::new(two_tier));
     // 启动预热（library:all / genre:all / settings），失败不阻断启动
     let cf_clone = cache_facade.clone();
     let db_clone = db.clone();
     tokio::spawn(async move {
-        emrs_core::cache::preheat(&cf_clone, &db_clone).await;
+        emrs_infra::cache::preheat(&cf_clone, &db_clone).await;
         tracing::info!("缓存预热完成");
     });
 

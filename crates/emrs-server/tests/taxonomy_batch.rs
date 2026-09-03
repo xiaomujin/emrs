@@ -5,8 +5,8 @@
 //! 被调用方 `.unwrap_or_default()` 吞掉 → People/Genres 全空。
 
 use emrs_core::config::StorageConfig;
-use emrs_core::stores::taxonomy_store::PersonBrief;
-use emrs_core::stores::{ItemRow, ItemsStore};
+use emrs_infra::stores::taxonomy_store::PersonBrief;
+use emrs_infra::stores::{ItemRow, ItemsStore};
 use emrs_server::emby::{ItemImageFlags, item_to_json};
 
 fn tmp_sqlite_dsn(tag: &str) -> String {
@@ -19,12 +19,12 @@ fn tmp_sqlite_dsn(tag: &str) -> String {
     )
 }
 
-async fn setup_db(dsn: &str) -> emrs_core::db::Db {
+async fn setup_db(dsn: &str) -> emrs_infra::db::Db {
     let cfg = StorageConfig {
         dsn: dsn.to_string(),
         max_connections: 4,
     };
-    let db = emrs_core::db::Db::connect(&cfg).await.unwrap();
+    let db = emrs_infra::db::Db::connect(&cfg).await.unwrap();
     db.migrate().await.unwrap();
     db
 }

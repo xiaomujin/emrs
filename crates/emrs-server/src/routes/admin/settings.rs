@@ -9,7 +9,7 @@ use crate::state::AppState;
 
 /// GET /admin/settings：读取全部 app_setting。
 pub(super) async fn get_settings(State(st): State<AppState>) -> Response {
-    match emrs_core::stores::ItemsStore::list_settings(&st.db).await {
+    match emrs_infra::stores::ItemsStore::list_settings(&st.db).await {
         Ok(rows) => {
             let settings: serde_json::Map<String, serde_json::Value> =
                 rows.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
@@ -29,7 +29,7 @@ pub(super) async fn set_setting(
 ) -> Response {
     let mut updated = 0;
     for (key, value) in &body {
-        match emrs_core::stores::ItemsStore::set_setting(&st.db, key, value).await {
+        match emrs_infra::stores::ItemsStore::set_setting(&st.db, key, value).await {
             Ok(_) => updated += 1,
             Err(e) => {
                 tracing::error!(error = %e, key, "set_setting failed");

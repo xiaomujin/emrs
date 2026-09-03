@@ -14,9 +14,9 @@ use super::{
     BaseItemDto, ImageTagsDto, NameIdDto, NameIdTypeDto, ViewsUserData, genre_id, image_tag,
     item_id, library_id, person_id, studio_id,
 };
-use emrs_core::db::Db;
 use emrs_core::playback::ticket::{TicketClaims, issue_ticket};
-use emrs_core::stores::{
+use emrs_infra::db::Db;
+use emrs_infra::stores::{
     ItemRow, ItemsStore, MediaSourceRow, StreamInfo,
     image_store::ImageTypeIds,
     taxonomy_store::{ItemTaxonomy, PersonBrief, PersonRow},
@@ -1422,7 +1422,7 @@ fn external_subtitle_language(title: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emrs_core::stores::ItemRow;
+    use emrs_infra::stores::ItemRow;
 
     fn row() -> ItemRow {
         ItemRow {
@@ -1501,7 +1501,7 @@ mod tests {
     /// 必须与旧 `json!` 版一致（PascalCase key、前缀 Id、Character 省略语义）。
     #[test]
     fn typed_taxonomy_subobjects_shape() {
-        use emrs_core::stores::taxonomy_store::{ItemTaxonomy, PersonBrief};
+        use emrs_infra::stores::taxonomy_store::{ItemTaxonomy, PersonBrief};
         let tax = ItemTaxonomy {
             genres: vec![(1, "动作".into()), (2, "科幻".into())],
             people: vec![PersonBrief {
@@ -1780,7 +1780,7 @@ mod tests {
     /// NalLengthSize 仅 h264/AVC 出现。
     #[test]
     fn media_stream_dto_shape() {
-        use emrs_core::stores::StreamInfo;
+        use emrs_infra::stores::StreamInfo;
 
         // RequiredHttpHeaders 恒空对象（非 null）
         assert_eq!(
@@ -1889,7 +1889,7 @@ mod tests {
     /// tmdb → `ProviderIds.Tmdb`；无则省略（保旧 `json!` 形状）。
     #[test]
     fn person_detail_dto_shape() {
-        use emrs_core::stores::taxonomy_store::PersonRow;
+        use emrs_infra::stores::taxonomy_store::PersonRow;
         let person = PersonRow {
             id: 7,
             tmdb_id: Some("12345".into()),

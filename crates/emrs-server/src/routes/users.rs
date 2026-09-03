@@ -14,7 +14,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::Value;
 
-use emrs_core::auth::{AuthStore, random_token};
+use emrs_core::auth::random_token;
+use emrs_infra::auth_store::AuthStore;
 
 use crate::middleware::device_from_parts;
 use crate::state::AppState;

@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use emrs_core::importer::scanner::normalize_canonical_path;
+use emrs_infra::scanner::normalize_canonical_path;
 
 use crate::state::AppState;
 
@@ -153,7 +153,7 @@ pub(super) async fn create_library(
         return (StatusCode::BAD_REQUEST, "name 和至少一个 path 不能为空").into_response();
     }
     if let Some(ct) = &body.collection_type
-        && !emrs_core::stores::is_valid_collection_type(ct)
+        && !emrs_infra::stores::is_valid_collection_type(ct)
     {
         return (
             StatusCode::BAD_REQUEST,
@@ -256,7 +256,7 @@ pub(super) async fn update_library(
         return (StatusCode::BAD_REQUEST, "name 不能为空").into_response();
     }
     if let Some(ct) = &body.collection_type
-        && !emrs_core::stores::is_valid_collection_type(ct)
+        && !emrs_infra::stores::is_valid_collection_type(ct)
     {
         return (
             StatusCode::BAD_REQUEST,

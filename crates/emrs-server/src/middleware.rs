@@ -10,7 +10,8 @@ use axum::extract::Request;
 use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use emrs_core::auth::{AuthContext, AuthStore, DeviceInfo, token_hash};
+use emrs_core::auth::{AuthContext, DeviceInfo, token_hash};
+use emrs_infra::auth_store::AuthStore;
 use std::time::Instant;
 
 use crate::state::AppState;

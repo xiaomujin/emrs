@@ -9,6 +9,7 @@
 //! - [`views`]：`/Users/{id}/Views`（CollectionFolder 成型）
 //! - [`session`]：会话 / 登录响应
 //! - [`user`]：`/Users` 系列响应（UserDto）
+//! - [`user_data`]：`UserItemData` → `ViewsUserData` 成型转换（裁定 C3；孤儿规则下为自由函数）
 
 pub use emby_proto::*;
 
@@ -17,6 +18,8 @@ mod latest;
 mod list_dto;
 mod session;
 mod user;
+pub(crate) use user_data::to_views_user_data;
+mod user_data;
 mod views;
 pub use dto::*;
 pub use latest::*;

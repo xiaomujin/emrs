@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use super::dto::{GenreItemDto, ItemImageFlags, PersonItemDto, item_user_data, provider_ids};
 use super::{BaseItemDto, ImageTagsDto, genre_id, image_tag, item_id};
-use emrs_core::stores::{ItemRow, taxonomy_store::ItemTaxonomy};
+use emrs_infra::stores::{ItemRow, taxonomy_store::ItemTaxonomy};
 
 /// 单个 Latest 条目（轻量卡片，对齐 emos 参考字段集）。
 #[derive(Serialize)]
@@ -102,8 +102,8 @@ impl LatestItemJson {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emrs_core::stores::ItemRow;
-    use emrs_core::stores::taxonomy_store::{ItemTaxonomy, PersonBrief};
+    use emrs_infra::stores::ItemRow;
+    use emrs_infra::stores::taxonomy_store::{ItemTaxonomy, PersonBrief};
 
     fn row() -> ItemRow {
         ItemRow {

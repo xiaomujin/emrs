@@ -22,8 +22,8 @@ use serde::Serialize;
 
 use super::dto::{ItemImageFlags, PersonItemDto, item_user_data, provider_ids, provider_ids_map};
 use super::{BaseItemDto, ImageTagsDto, ViewsUserData, image_tag, item_id, library_id};
-use emrs_core::stores::taxonomy_store::ItemTaxonomy;
-use emrs_core::stores::{ItemRow, ResumeEntry};
+use emrs_infra::stores::taxonomy_store::ItemTaxonomy;
+use emrs_infra::stores::{ItemRow, ResumeEntry};
 
 /// 由 `ItemRow` + 预取图片标志计算 Episode 顶层显示比例（横图 vs 竖海报）。
 fn aspect(item: &ItemRow) -> f64 {
@@ -888,7 +888,7 @@ mod tests {
     fn next_up_keeps_people_but_no_other_taxonomy() {
         let tax = ItemTaxonomy {
             genres: vec![(28, "动作".into())],
-            people: vec![emrs_core::stores::taxonomy_store::PersonBrief {
+            people: vec![emrs_infra::stores::taxonomy_store::PersonBrief {
                 id: 100,
                 name: "演员".into(),
                 role: "Actor".into(),

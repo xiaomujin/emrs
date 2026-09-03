@@ -11,7 +11,7 @@
 //! 所有时间用显式 ISO 字符串（字典序==时间序），保证 anchor 确定。
 
 use emrs_core::config::StorageConfig;
-use emrs_core::stores::{ItemsStore, ResumeEntry};
+use emrs_infra::stores::{ItemsStore, ResumeEntry};
 use emrs_server::emby::ResumeCardJson;
 
 fn tmp_sqlite_dsn(tag: &str) -> String {
@@ -24,12 +24,12 @@ fn tmp_sqlite_dsn(tag: &str) -> String {
     )
 }
 
-async fn setup_db(dsn: &str) -> emrs_core::db::Db {
+async fn setup_db(dsn: &str) -> emrs_infra::db::Db {
     let cfg = StorageConfig {
         dsn: dsn.to_string(),
         max_connections: 4,
     };
-    let db = emrs_core::db::Db::connect(&cfg).await.unwrap();
+    let db = emrs_infra::db::Db::connect(&cfg).await.unwrap();
     db.migrate().await.unwrap();
     db
 }
@@ -39,7 +39,7 @@ const USER: i64 = 1;
 /// 插入一个 item（type/library/parent/title + 季号/集号 + 是否虚拟），返回 id。
 #[allow(clippy::too_many_arguments)]
 async fn ins(
-    db: &emrs_core::db::Db,
+    db: &emrs_infra::db::Db,
     ty: &str,
     library_id: i64,
     parent_id: Option<i64>,
@@ -70,7 +70,7 @@ async fn ins(
         .unwrap()
 }
 
-async fn new_library(db: &emrs_core::db::Db, name: &str) -> i64 {
+async fn new_library(db: &emrs_infra::db::Db, name: &str) -> i64 {
     sqlx::query("INSERT INTO library (name, collection_type) VALUES (?, 'tvshows')")
         .bind(name)
         .execute(db.pool())
@@ -83,7 +83,7 @@ async fn new_library(db: &emrs_core::db::Db, name: &str) -> i64 {
         .unwrap()
 }
 
-async fn ins_media(db: &emrs_core::db::Db, item_id: i64, uuid: &str, dur: i64) {
+async fn ins_media(db: &emrs_infra::db::Db, item_id: i64, uuid: &str, dur: i64) {
     sqlx::query(
         "INSERT INTO media_source (uuid, item_id, name, protocol, container, file_duration, path) \
          VALUES (?, ?, ?, 'file', 'mkv', ?, ?)",
@@ -101,7 +101,7 @@ async fn ins_media(db: &emrs_core::db::Db, item_id: i64, uuid: &str, dur: i64) {
 /// 用户进度行：显式 `updated_at` 控制 recency（anchor 依据）。
 #[allow(clippy::too_many_arguments)]
 async fn uid(
-    db: &emrs_core::db::Db,
+    db: &emrs_infra::db::Db,
     item_id: i64,
     played: i64,
     play_count: i64,
@@ -124,15 +124,15 @@ async fn uid(
 }
 
 /// 看到一半（played=0, play_count=1）。
-async fn in_progress(db: &emrs_core::db::Db, item_id: i64, ticks: i64, ts: &str) {
+async fn in_progress(db: &emrs_infra::db::Db, item_id: i64, ticks: i64, ts: &str) {
     uid(db, item_id, 0, 1, ticks, ts).await;
 }
 /// 已看完（played=1, play_count=1）。
-async fn done(db: &emrs_core::db::Db, item_id: i64, ts: &str) {
+async fn done(db: &emrs_infra::db::Db, item_id: i64, ts: &str) {
     uid(db, item_id, 1, 1, 999_000_000, ts).await;
 }
 
-async fn ins_image(db: &emrs_core::db::Db, parent_id: i64, image_type: &str) -> i64 {
+async fn ins_image(db: &emrs_infra::db::Db, parent_id: i64, image_type: &str) -> i64 {
     sqlx::query(
         "INSERT INTO item_image (parent_type, parent_id, image_type, path_url) \
          VALUES ('item', ?, ?, ?)",
@@ -154,7 +154,7 @@ async fn ins_image(db: &emrs_core::db::Db, parent_id: i64, image_type: &str) -> 
 }
 
 /// 造 series→season 链，返回 (series_id, season_id)。`series` 用唯一前缀避免标题冲突。
-async fn mk_show(db: &emrs_core::db::Db, library_id: i64, name: &str) -> (i64, i64) {
+async fn mk_show(db: &emrs_infra::db::Db, library_id: i64, name: &str) -> (i64, i64) {
     let series = ins(
         db,
         "series",
@@ -182,7 +182,7 @@ async fn mk_show(db: &emrs_core::db::Db, library_id: i64, name: &str) -> (i64, i
 
 /// 在某季下造一集（真实/虚拟，带季号集号）。
 async fn mk_ep(
-    db: &emrs_core::db::Db,
+    db: &emrs_infra::db::Db,
     library_id: i64,
     season_id: i64,
     name: &str,

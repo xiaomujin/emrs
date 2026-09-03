@@ -8,7 +8,7 @@ use serde::de::{self, Visitor};
 
 use crate::emby;
 use crate::state::AppState;
-use emrs_core::stores::ItemsStore;
+use emrs_infra::stores::ItemsStore;
 
 // ---------------------------------------------------------------------------
 // 宽松反序列化

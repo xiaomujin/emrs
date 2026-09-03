@@ -11,9 +11,9 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use emrs_core::cache::MemoryCache;
 use emrs_core::config::Config;
-use emrs_core::db::Db;
+use emrs_infra::cache::MemoryCache;
+use emrs_infra::db::Db;
 use emrs_server::{AppState, router};
 
 async fn test_state() -> AppState {
@@ -55,27 +55,24 @@ async fn test_state() -> AppState {
         db: db.clone(),
         cache: Arc::new(MemoryCache::new()),
         cfg: Arc::new(cfg),
-        drivers: Arc::new(emrs_core::cloud::DriverRegistry::new(
-            db.clone(),
-            Arc::new(Config::default()),
+        drivers: Arc::new(emrs_infra::cloud::build_registry()),
+        http: Arc::new(emrs_infra::http_client::HttpClient::none()),
+        jobs: Arc::new(emrs_service::job::JobManager::new()),
+        watcher: Arc::new(emrs_infra::watcher::LibraryWatcher::new(db.clone())),
+        block_cache: Arc::new(emrs_infra::block_cache::BlockCache::new(
+            emrs_infra::block_cache::BlockCacheConfig::default(),
         )),
-        http: Arc::new(emrs_core::http_client::HttpClient::none()),
-        jobs: Arc::new(emrs_core::job::JobManager::new()),
-        watcher: Arc::new(emrs_core::watcher::LibraryWatcher::new(db.clone())),
-        block_cache: Arc::new(emrs_core::playback::block_cache::BlockCache::new(
-            emrs_core::playback::block_cache::BlockCacheConfig::default(),
-        )),
-        pipeline: Arc::new(emrs_core::importer::pipeline::Pipeline::new(
+        pipeline: Arc::new(emrs_service::importer::pipeline::Pipeline::new(
             db.clone(),
             emrs_core::config::PipelineConfig {
                 enabled: false,
                 ..Default::default()
             },
             String::new(),
-            emrs_core::http_client::Outbound::none(),
+            emrs_infra::http_client::Outbound::none(),
         )),
-        cache_facade: Arc::new(emrs_core::cache::CacheFacade::new(Arc::new(
-            emrs_core::cache::TwoTierCache::new(Arc::new(MemoryCache::new()), None),
+        cache_facade: Arc::new(emrs_infra::cache::CacheFacade::new(Arc::new(
+            emrs_infra::cache::TwoTierCache::new(Arc::new(MemoryCache::new()), None),
         ))),
     }
 }

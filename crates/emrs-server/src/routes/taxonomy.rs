@@ -15,7 +15,7 @@ use crate::emby::{
 };
 use crate::routes::params::{PaginationQuery, library_parent_filter};
 use crate::state::AppState;
-use emrs_core::stores::ItemsStore;
+use emrs_infra::stores::ItemsStore;
 
 /// 认证组：分类聚合端点 + Items/Counts。
 pub fn authenticated() -> Router<AppState> {
@@ -235,11 +235,11 @@ async fn list_official_ratings(
 /// GET /Items/Counts：Movie/Series/Episode 计数。
 async fn items_counts(State(st): State<AppState>) -> Response {
     match ItemsStore::item_counts(&st.db).await {
-        Ok((movie_count, series_count, episode_count)) => axum::Json(crate::emby::ItemsCounts {
-            movie_count,
-            series_count,
-            episode_count,
-            item_count: movie_count + series_count + episode_count,
+        Ok(c) => axum::Json(crate::emby::ItemsCounts {
+            movie_count: c.movies,
+            series_count: c.series,
+            episode_count: c.episodes,
+            item_count: c.movies + c.series + c.episodes,
             ..Default::default()
         })
         .into_response(),

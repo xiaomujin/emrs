@@ -15,10 +15,10 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use emrs_core::db::Db;
-use emrs_core::importer::stages::ScanStage;
-use emrs_core::job::JobStatus;
-use emrs_core::stores::scan_job_store;
+use emrs_infra::db::Db;
+use emrs_infra::stores::scan_job_store;
+use emrs_service::importer::stages::ScanStage;
+use emrs_service::job::JobStatus;
 
 use crate::state::AppState;
 
@@ -122,7 +122,7 @@ pub(super) async fn start_scan(
             let rows = poll_rows().await;
             let active = rows
                 .iter()
-                .filter(|(s, _, _)| s == "pending" || s == "running")
+                .filter(|r| r.status == "pending" || r.status == "running")
                 .count();
             if active == 0 {
                 break;
@@ -133,7 +133,7 @@ pub(super) async fn start_scan(
                 canceled = true;
                 break;
             }
-            let pending = rows.iter().filter(|(s, _, _)| s == "pending").count();
+            let pending = rows.iter().filter(|r| r.status == "pending").count();
             jobs.set_progress(
                 &job_id,
                 format!("扫描中 running={} pending={}", active - pending, pending),
@@ -145,10 +145,10 @@ pub(super) async fn start_scan(
         let rows = poll_rows().await;
         let media: i64 = rows
             .iter()
-            .filter(|(s, _, _)| s != "canceled")
-            .map(|(_, _, u)| *u)
+            .filter(|r| r.status != "canceled")
+            .map(|r| r.updated)
             .sum();
-        let errors: i64 = rows.iter().filter(|(s, _, _)| s == "failed").count() as i64;
+        let errors: i64 = rows.iter().filter(|r| r.status == "failed").count() as i64;
 
         Ok(json!({
             "roots": roots_display,
@@ -388,7 +388,7 @@ pub(super) async fn start_probe(
     State(st): State<AppState>,
     Query(opts): Query<ProbeOpts>,
 ) -> Response {
-    use emrs_core::importer::probe::{container_for, probe_duration, probe_media};
+    use emrs_infra::probe::{container_for, probe_duration, probe_media};
 
     // 缺失流信息/时长的本地视频：metadata 为 NULL / 空串 / "[]"（无 ffprobe 时的
     // 空结果），或时长缺失（fragmented MP4 等头部解析拿不到、需要 ffprobe 回填的容器）。

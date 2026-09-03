@@ -2,15 +2,16 @@
 
 use std::sync::Arc;
 
-use emrs_core::cache::{Cache, CacheFacade};
+use emrs_core::cache::Cache;
 use emrs_core::cloud::DriverRegistry;
 use emrs_core::config::Config;
-use emrs_core::db::Db;
-use emrs_core::http_client::HttpClient;
-use emrs_core::importer::pipeline::Pipeline;
-use emrs_core::job::JobManager;
-use emrs_core::playback::block_cache::BlockCache;
-use emrs_core::watcher::LibraryWatcher;
+use emrs_infra::block_cache::BlockCache;
+use emrs_infra::cache::CacheFacade;
+use emrs_infra::db::Db;
+use emrs_infra::http_client::HttpClient;
+use emrs_infra::watcher::LibraryWatcher;
+use emrs_service::importer::pipeline::Pipeline;
+use emrs_service::job::JobManager;
 
 #[derive(Clone)]
 pub struct AppState {

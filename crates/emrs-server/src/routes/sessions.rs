@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
 use emrs_core::auth::AuthContext;
-use emrs_core::stores::{ItemsStore, PlaybackStore};
+use emrs_infra::stores::{ItemsStore, PlaybackStore};
 
 use crate::emby::SessionListEntryDto;
 use crate::routes::params::resolve_item_id;
