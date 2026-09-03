@@ -11,6 +11,7 @@ emrs-infra.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+thiserror.workspace = true
 serde_json.workspace = true
 dashmap.workspace = true
 uuid.workspace = true
