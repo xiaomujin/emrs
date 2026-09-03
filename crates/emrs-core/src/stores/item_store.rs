@@ -127,12 +127,14 @@ pub async fn link_studio(db: &Db, item_id: i64, studio_id: i64, sort_order: i64)
 
 /// 幂等关联 item → tag（带排序）。
 pub async fn link_tag(db: &Db, item_id: i64, tag_id: i64, sort_order: i64) {
-    let _ = sqlx::query("INSERT OR IGNORE INTO item_tag (item_id, tag_id, sort_order) VALUES (?, ?, ?)")
-        .bind(item_id)
-        .bind(tag_id)
-        .bind(sort_order)
-        .execute(db.pool())
-        .await;
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO item_tag (item_id, tag_id, sort_order) VALUES (?, ?, ?)",
+    )
+    .bind(item_id)
+    .bind(tag_id)
+    .bind(sort_order)
+    .execute(db.pool())
+    .await;
 }
 
 /// 幂等关联 item → person。`role` / `character_name` 由调用方决定（cast：role="Actor"、
@@ -157,7 +159,6 @@ pub async fn link_person(
     .execute(db.pool())
     .await;
 }
-
 
 /// Movie/Series 列（无 media_source JOIN，folder 项不带媒体源）。
 const FOLDER_COLS: &str = "i.id, i.library_id AS library_id, \

@@ -12,12 +12,12 @@ use anyhow::Result;
 use tracing::info;
 
 use crate::importer::nfo::Nfo;
-use crate::stores::item_store;
-use crate::stores::taxonomy_store;
 use crate::importer::tmdb::{
     Credits, EpisodeBrief, MovieDetail, SeasonBrief, TmdbMovie, TmdbScraper, TmdbTv, TvDetail,
     best_logo, extract_year,
 };
+use crate::stores::item_store;
+use crate::stores::taxonomy_store;
 
 use super::{Scanner, ScrapeOutcome, sort_title};
 

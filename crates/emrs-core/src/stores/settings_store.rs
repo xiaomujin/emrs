@@ -7,10 +7,11 @@ use crate::db::Db;
 
 /// 读取单个 `app_setting`（不存在或值为 NULL → `None`）。
 pub async fn get_setting(db: &Db, key: &str) -> anyhow::Result<Option<String>> {
-    let row = sqlx::query_scalar::<_, Option<String>>("SELECT value FROM app_setting WHERE key = ?")
-        .bind(key)
-        .fetch_optional(db.pool())
-        .await?;
+    let row =
+        sqlx::query_scalar::<_, Option<String>>("SELECT value FROM app_setting WHERE key = ?")
+            .bind(key)
+            .fetch_optional(db.pool())
+            .await?;
     Ok(row.flatten())
 }
 

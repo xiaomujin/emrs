@@ -17,8 +17,8 @@ use serde_json::json;
 
 use emrs_core::db::Db;
 use emrs_core::importer::stages::ScanStage;
-use emrs_core::stores::scan_job_store;
 use emrs_core::job::JobStatus;
+use emrs_core::stores::scan_job_store;
 
 use crate::state::AppState;
 
