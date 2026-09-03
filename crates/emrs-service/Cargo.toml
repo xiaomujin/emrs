@@ -16,8 +16,6 @@ serde_json.workspace = true
 dashmap.workspace = true
 uuid.workspace = true
 chrono.workspace = true
-regex.workspace = true
-quick-xml.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
