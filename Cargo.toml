@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/emby-proto", "crates/emrs-core", "crates/emrs-server"]
+members = ["crates/emby-proto", "crates/emrs-core", "crates/emrs-infra", "crates/emrs-service", "crates/emrs-server"]
 
 [workspace.package]
 version = "0.1.7"
@@ -10,6 +10,8 @@ license = "MIT"
 [workspace.dependencies]
 emby-proto = { path = "crates/emby-proto" }
 emrs-core = { path = "crates/emrs-core" }
+emrs-infra = { path = "crates/emrs-infra" }
+emrs-service = { path = "crates/emrs-service" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

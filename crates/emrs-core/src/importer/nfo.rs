@@ -361,14 +361,14 @@ fn decode(bytes: Vec<u8>) -> String {
             return match enc {
                 "UTF-16LE" => String::from_utf16(
                     &body
-                        .chunks_exact(2)
+                        .as_chunks::<2>().0.iter()
                         .map(|c| u16::from_le_bytes([c[0], c[1]]))
                         .collect::<Vec<_>>(),
                 )
                 .unwrap_or_default(),
                 "UTF-16BE" => String::from_utf16(
                     &body
-                        .chunks_exact(2)
+                        .as_chunks::<2>().0.iter()
                         .map(|c| u16::from_be_bytes([c[0], c[1]]))
                         .collect::<Vec<_>>(),
                 )

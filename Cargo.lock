@@ -701,6 +701,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "emrs-infra"
+version = "0.1.7"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "emby-proto",
+ "emrs-core",
+ "ffmpeg-sidecar",
+ "filetime",
+ "moka",
+ "notify",
+ "quick-xml",
+ "rand 0.8.7",
+ "redis",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "emrs-server"
 version = "0.1.7"
 dependencies = [
@@ -725,6 +754,25 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "emrs-service"
+version = "0.1.7"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dashmap",
+ "emby-proto",
+ "emrs-core",
+ "emrs-infra",
+ "quick-xml",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 

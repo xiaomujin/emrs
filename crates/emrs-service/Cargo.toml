@@ -1,0 +1,22 @@
+[package]
+name = "emrs-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+emby-proto.workspace = true
+emrs-core.workspace = true
+emrs-infra.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+dashmap.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+regex.workspace = true
+quick-xml.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

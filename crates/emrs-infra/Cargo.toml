@@ -1,0 +1,32 @@
+[package]
+name = "emrs-infra"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+emby-proto.workspace = true
+emrs-core.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time", "process"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+sqlx.workspace = true
+redis.workspace = true
+moka.workspace = true
+reqwest.workspace = true
+notify.workspace = true
+ffmpeg-sidecar.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+rand.workspace = true
+filetime.workspace = true
+quick-xml.workspace = true
+regex.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
