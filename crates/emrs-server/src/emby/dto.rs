@@ -11,8 +11,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    BaseItemDto, ImageTagsDto, NameIdDto, NameIdTypeDto, ViewsUserData, genre_id, image_tag,
-    item_id, library_id, person_id, studio_id,
+    BaseItemDto, ExternalUrlDto, ImageTagsDto, NameIdDto, NameIdTypeDto, PersonDetailDto,
+    PersonItemDto, RequiredHttpHeaders, ViewsUserData, genre_id, image_tag, item_id, library_id,
+    person_id, studio_id,
 };
 use emrs_core::playback::ticket::{TicketClaims, issue_ticket};
 use emrs_infra::db::Db;
@@ -28,29 +29,7 @@ use emrs_infra::stores::{
 /// 存在时 `ImageTags.Primary` = `img-{图片行 id}`；`PremiereDate`/`ProductionYear`
 /// 仅 birthday 存在时发（`ProductionYear` 取 birthday 前 4 位 parse，失败→0）；
 /// `Overview` 仅 description 存在时发。
-#[derive(Serialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct PersonDetailDto {
-    #[serde(flatten)]
-    pub name_id_type: NameIdTypeDto,
-    pub server_id: String,
-    pub production_locations: Vec<String>,
-    pub provider_ids: serde_json::Map<String, serde_json::Value>,
-    pub image_tags: ImageTagsDto,
-    pub backdrop_image_tags: Vec<String>,
-    pub primary_image_aspect_ratio: f64,
-    pub date_created: String,
-    pub date_modified: String,
-    pub external_urls: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub premiere_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub production_year: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub overview: Option<String>,
-}
-
-/// PersonRow → Emby Person 详情 DTO。
+/// PersonRow → Emby Person 详情 DTO（DTO 定义在 emby-proto，裁定 C11）。
 ///
 /// Id 用 `p-{id}` 前缀，与 `attach_taxonomy` 的 People 数组、`/Persons` 列表、
 /// `/Items/{id}/Images/p-{id}` 图片路由保持一致。`primary_image_id` 为人员头像
@@ -194,44 +173,19 @@ pub type GenreItemDto = NameIdDto;
 /// Emby `Studios` 元素 `{Id, Name}`（= [`NameIdDto`]，alias 复用）。
 pub type StudioDto = NameIdDto;
 
-/// Emby `ExternalUrls` 元素 `{Name, Url}`（Movie/Series 外链）。
-#[derive(Serialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct ExternalUrlDto {
-    pub name: String,
-    pub url: String,
-}
-
-/// Emby `People` 元素（演职员）。`Character` / `PrimaryImageTag` 仅当存在时输出。
-/// flatten [`NameIdDto`]（Name/Id）+ `Role` + `Type` + 可选 `Character` / `PrimaryImageTag`。
-#[derive(Serialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct PersonItemDto {
-    #[serde(flatten)]
-    name_id: NameIdDto,
-    role: String,
-    #[serde(rename = "Type")]
-    item_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    character: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    primary_image_tag: Option<String>,
-}
-
-impl PersonItemDto {
-    /// `PersonBrief` → `People` 数组元素（Name/Id/Role/Type + 可选 Character/PrimaryImageTag）。
-    /// 供 `item_to_json` / `LatestItemJson` 复用，两处 taxonomy 折入同构。
-    pub(crate) fn from_person(p: &PersonBrief) -> Self {
-        Self {
-            name_id: NameIdDto {
-                name: p.name.clone(),
-                id: person_id(p.id),
-            },
-            role: p.role.clone(),
-            item_type: "Person".into(),
-            character: p.character_name.clone(),
-            primary_image_tag: p.primary_image_id.map(image_tag),
-        }
+/// `PersonBrief` → `People` 数组元素（Name/Id/Role/Type + 可选 Character/PrimaryImageTag）。
+/// 供 `item_to_json` / `LatestItemJson` 复用，两处 taxonomy 折入同构。
+/// `PersonItemDto` 定义在 emby-proto（裁定 C11）；构造依赖 infra 的 `PersonBrief`，留 server。
+pub(crate) fn person_item_dto(p: &PersonBrief) -> PersonItemDto {
+    PersonItemDto {
+        name_id: NameIdDto {
+            name: p.name.clone(),
+            id: person_id(p.id),
+        },
+        role: p.role.clone(),
+        item_type: "Person".into(),
+        character: p.character_name.clone(),
+        primary_image_tag: p.primary_image_id.map(image_tag),
     }
 }
 
@@ -278,10 +232,6 @@ pub struct MediaSourceDto {
     item_id: String,
     chapters: Vec<serde_json::Value>,
 }
-
-/// `RequiredHttpHeaders`（恒空对象 `{}`）。
-#[derive(Serialize, Default)]
-pub struct RequiredHttpHeaders {}
 
 /// Emby `MediaStreams` 元素（扁平化：Video/Audio/Subtitle 变体字段一律 `Option`+skip，
 /// 仅本类型设置的字段出现）。
@@ -785,8 +735,7 @@ pub fn item_to_json(
                     id: genre_id(*gid),
                 })
                 .collect();
-            let people: Vec<PersonItemDto> =
-                t.people.iter().map(PersonItemDto::from_person).collect();
+            let people: Vec<PersonItemDto> = t.people.iter().map(person_item_dto).collect();
             let studios = if t.studios.is_empty() {
                 None
             } else {

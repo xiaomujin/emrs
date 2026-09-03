@@ -20,7 +20,7 @@
 
 use serde::Serialize;
 
-use super::dto::{ItemImageFlags, PersonItemDto, item_user_data, provider_ids, provider_ids_map};
+use super::dto::{ItemImageFlags, item_user_data, person_item_dto, provider_ids, provider_ids_map};
 use super::{BaseItemDto, ImageTagsDto, ViewsUserData, image_tag, item_id, library_id};
 use emrs_infra::stores::taxonomy_store::ItemTaxonomy;
 use emrs_infra::stores::{ItemRow, ResumeEntry};
@@ -498,7 +498,7 @@ pub struct NextUpJson {
     parent_index_number: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent_id: Option<String>,
-    people: Vec<PersonItemDto>,
+    people: Vec<emby_proto::PersonItemDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     series_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -536,8 +536,7 @@ impl NextUpJson {
     ) -> Self {
         let img = build_card_images(item, flags);
         let is_folder = matches!(item.item_type.as_str(), "Series" | "Season");
-        let people: Vec<PersonItemDto> =
-            tax.people.iter().map(PersonItemDto::from_person).collect();
+        let people: Vec<_> = tax.people.iter().map(person_item_dto).collect();
         Self {
             base: BaseItemDto {
                 name: item.title.clone(),

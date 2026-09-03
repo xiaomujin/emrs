@@ -7,7 +7,7 @@
 
 use serde::Serialize;
 
-use super::dto::{GenreItemDto, ItemImageFlags, PersonItemDto, item_user_data, provider_ids};
+use super::dto::{GenreItemDto, ItemImageFlags, item_user_data, person_item_dto, provider_ids};
 use super::{BaseItemDto, ImageTagsDto, genre_id, image_tag, item_id};
 use emrs_infra::stores::{ItemRow, taxonomy_store::ItemTaxonomy};
 
@@ -19,7 +19,7 @@ pub struct LatestItemJson {
     base: BaseItemDto,
     production_year: Option<i64>,
     genres: Vec<String>,
-    people: Vec<PersonItemDto>,
+    people: Vec<emby_proto::PersonItemDto>,
     genre_items: Vec<GenreItemDto>,
     media_type: String,
     can_delete: bool,
@@ -67,8 +67,7 @@ impl LatestItemJson {
                 id: genre_id(*id),
             })
             .collect();
-        let people: Vec<PersonItemDto> =
-            tax.people.iter().map(PersonItemDto::from_person).collect();
+        let people: Vec<_> = tax.people.iter().map(person_item_dto).collect();
 
         Self {
             base: BaseItemDto {

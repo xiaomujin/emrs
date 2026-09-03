@@ -10,12 +10,14 @@
 
 mod base;
 mod id;
+mod person;
 mod system;
 mod userdata;
 mod wrappers;
 
 pub use base::*;
 pub use id::*;
+pub use person::*;
 pub use system::*;
 pub use userdata::*;
 pub use wrappers::*;
