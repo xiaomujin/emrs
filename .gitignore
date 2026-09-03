@@ -11,3 +11,4 @@ emby_json
 docs
 .cargo
 CLAUDE.md
+baseline-*.log
