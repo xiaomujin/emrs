@@ -18,6 +18,9 @@ use crate::state::AppState;
 
 /// Emby 客户端 token 提取矩阵。
 pub fn extract_token(parts: &http::request::Parts) -> String {
+    const QUERY_KEYS: [&str; 4] = ["x-emby-token", "api_key", "apikey", "x-mediabrowser-token"];
+    const HEADER_KEYS: [&str; 2] = ["x-emby-token", "x-mediabrowser-token"];
+
     // 1. Authorization: Bearer
     if let Some(auth) = parts
         .headers
@@ -30,16 +33,12 @@ pub fn extract_token(parts: &http::request::Parts) -> String {
         }
     }
     // 2-5. query: x-emby-token / api_key / apikey / x-mediabrowser-token
-    let q: Vec<(String, String)> = parts.uri.query().map(parse_query_pairs).unwrap_or_default();
-    for key in ["x-emby-token", "api_key", "apikey", "x-mediabrowser-token"] {
-        if let Some((_, v)) = q.iter().find(|(k, _)| k == key)
-            && !v.is_empty()
-        {
-            return v.clone();
-        }
+    // （惰性解析：命中 key 才解码其值，不整串构造键值对）
+    if let Some(v) = query_value_for(parts.uri.query(), &QUERY_KEYS) {
+        return v;
     }
     // 6-7. 头：X-Emby-Token / X-MediaBrowser-Token
-    for h in ["x-emby-token", "x-mediabrowser-token"] {
+    for h in HEADER_KEYS {
         if let Some(v) = parts.headers.get(h).and_then(|v| v.to_str().ok())
             && !v.is_empty()
         {
@@ -56,6 +55,21 @@ pub fn extract_token(parts: &http::request::Parts) -> String {
         return token;
     }
     String::new()
+}
+
+/// 惰性 query 取键：仅当某对键名匹配 `keys` 且值非空时才 URL 解码一次返回，
+/// 未命中目标键时零分配。
+fn query_value_for(query: Option<&str>, keys: &[&str]) -> Option<String> {
+    for pair in query?.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if !v.is_empty() && keys.iter().any(|key| k.eq_ignore_ascii_case(key)) {
+            return Some(urldecode(v));
+        }
+    }
+    None
 }
 
 /// `X-Emby-Authorization` 里解析 `Token="..."` 与 device 信息。
@@ -103,35 +117,19 @@ pub fn device_from_parts(parts: &http::request::Parts) -> DeviceInfo {
         .unwrap_or_default()
 }
 
-fn parse_query_pairs(query: &str) -> Vec<(String, String)> {
-    query
-        .split('&')
-        .filter(|s| !s.is_empty())
-        .map(|pair| {
-            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-            (k.to_ascii_lowercase(), urldecode(v))
-        })
-        .collect()
-}
-
-/// 轻量 percent-decode（query 值足够；hex 与 '+' → 空格）。
+/// 轻量 percent-decode（query 值足够；`%XX` hex 与 `+` → 空格）。
 fn urldecode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'%' if i + 2 < bytes.len() + 1 && i + 2 < bytes.len() + 1 => {
-                if let (Some(h), Some(l)) = (
-                    bytes.get(i + 1).and_then(|b| (*b as char).to_digit(16)),
-                    bytes.get(i + 2).and_then(|b| (*b as char).to_digit(16)),
-                ) {
-                    out.push((h * 16 + l) as u8);
-                    i += 3;
-                } else {
-                    out.push(b'%');
-                    i += 1;
-                }
+            // `%` 后两个 hex 位齐全才解码；否则按字面 `%` 输出
+            b'%' if hex_val(bytes.get(i + 1)).and(hex_val(bytes.get(i + 2))).is_some() => {
+                let hi = hex_val(bytes.get(i + 1)).unwrap();
+                let lo = hex_val(bytes.get(i + 2)).unwrap();
+                out.push(hi * 16 + lo);
+                i += 3;
             }
             b'+' => {
                 out.push(b' ');
@@ -144,6 +142,11 @@ fn urldecode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 单个十六进制位（`b` 为 None 或非 hex 时返回 None）。
+fn hex_val(b: Option<&u8>) -> Option<u8> {
+    (*b? as char).to_digit(16).map(|d| d as u8)
 }
 
 /// 匿名兼容读。
@@ -335,10 +338,7 @@ fn text_response(status: StatusCode, body: &str) -> Response {
 /// 只用于 JSON 组；流式播放路由绝不能加（防长播掐断）。
 pub async fn api_timeout(req: Request, next: Next) -> Response {
     const API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-    match tokio::time::timeout(API_TIMEOUT, next.run(req)).await {
-        Ok(res) => res,
-        Err(_) => text_response(StatusCode::REQUEST_TIMEOUT, "请求超时"),
-    }
+    tokio::time::timeout(API_TIMEOUT, next.run(req)).await.unwrap_or_else(|_| text_response(StatusCode::REQUEST_TIMEOUT, "请求超时"))
 }
 
 #[cfg(test)]
