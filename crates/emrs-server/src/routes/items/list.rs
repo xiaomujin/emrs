@@ -243,6 +243,14 @@ pub(super) async fn users_items(
     let types = parse_include_item_types(q.include_item_types.as_deref());
     let is_played = q.is_played;
     let is_favorite = q.is_favorite == Some(true);
+    // 搜索词规范化：Hills 等客户端在单个字符搜索词后追加 '.'（IME 候选残留，如 `我.`），
+    // SQL 里 `.` 是 LIKE 字面量，不剥会匹配不到——故剥尾部 '.' 再判定与下传。
+    let search_term = q
+        .search_term
+        .as_deref()
+        .map(|t| t.trim().trim_end_matches('.'));
+    // 是否携带有效搜索词：有则整条查询走统一 Movie/Series 搜索，避免被纯 Series 分支静默丢弃
+    let has_search_term = search_term.is_some_and(|t| !t.is_empty());
 
     // 收藏过滤：IsFavorite=true 或 Filters 含 IsFavorite 时只返回该用户的收藏
     let favorite_filter = is_favorite
@@ -295,20 +303,22 @@ pub(super) async fn users_items(
         && !genre_ids.is_empty()
     {
         ItemsStore::list_items_by_genre(&st.db, user_id, &genre_ids, &types, limit, start).await
-    } else if q
-        .include_item_types
-        .as_deref()
-        .unwrap_or("")
-        .contains("Series")
+    } else if !has_search_term
+        && q.include_item_types
+            .as_deref()
+            .unwrap_or("")
+            .contains("Series")
     {
         ItemsStore::list_series_by_library(&st.db, user_id, library_id, limit, start).await
     } else {
         // 默认 Movie/Series 列表（支持 SearchTerm / SortBy / SortOrder / IsPlayed / Tags）
+        // 注意：带 SearchTerm 时即使 IncludeItemTypes 含 Series 也走这里（list_movies_series
+        // 接受 movie+series 类型并施加标题过滤；list_series_by_library 无搜索参数，会静默丢搜索）。
         ItemsStore::list_movies_series(
             &st.db,
             user_id,
             library_id,
-            q.search_term.as_deref(),
+            search_term,
             &types,
             is_played_filter,
             q.tags.as_deref(),

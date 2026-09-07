@@ -824,6 +824,95 @@ async fn parent_id_prefix_dispatch() {
     let _ = std::fs::remove_dir_all(std::path::Path::new(&lib).parent().unwrap());
 }
 
+/// 回归：带 `SearchTerm` 时 `/Users/{uid}/Items` 必须按关键词过滤，
+/// 即使 `IncludeItemTypes` 含 `Series`（此前纯 Series 分支静默丢弃搜索，返回全部）。
+/// 复现 Hills 客户端 `SearchTerm=xue` / `SearchTerm=血.` + `IncludeItemTypes=Movie,Series` 返回整表。
+#[tokio::test]
+async fn items_search_term_filters_with_series_types() {
+    let state = test_state().await;
+    let lib = sample_library();
+    Importer::new(state.db.clone()).scan(&lib).await.unwrap();
+    let app = router(state.clone());
+
+    // 1) 带 SearchTerm + IncludeItemTypes=Movie,Series：只返回标题命中的条目，不能退回整表
+    let res = app
+        .clone()
+        .oneshot(auth_get(
+            "/Users/1/Items?IncludeItemTypes=Movie,Series&SearchTerm=Bunny",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = json_body(res).await;
+    assert_eq!(
+        v["TotalRecordCount"],
+        1,
+        "SearchTerm=Bunny 应命中 1 部（Big Buck Bunny），实际 {count}",
+        count = v["TotalRecordCount"]
+    );
+    assert_eq!(v["Items"][0]["Name"], "Big Buck Bunny");
+
+    // 2) 命中 Series 一侧（case 不敏感）
+    let res = app
+        .clone()
+        .oneshot(auth_get(
+            "/Users/1/Items?IncludeItemTypes=Movie,Series&SearchTerm=show",
+        ))
+        .await
+        .unwrap();
+    let v = json_body(res).await;
+    assert_eq!(
+        v["TotalRecordCount"], 1,
+        "SearchTerm=show 应命中 'Test Show'（大小写不敏感）"
+    );
+    assert_eq!(v["Items"][0]["Name"], "Test Show");
+
+    // 3) 无匹配关键词 → 空（证明确实被过滤，而非整表返回）
+    let res = app
+        .clone()
+        .oneshot(auth_get(
+            "/Users/1/Items?IncludeItemTypes=Movie,Series&SearchTerm=zzz_no_match",
+        ))
+        .await
+        .unwrap();
+    let v = json_body(res).await;
+    assert_eq!(
+        v["TotalRecordCount"], 0,
+        "无匹配 SearchTerm 应返回 0 条，不能回退为整表"
+    );
+
+    // 4) 客户端单字搜索会在词尾附带 '.'（如 Hills `SearchTerm=我.`）：须剥掉尾部 '.' 再匹配，
+    //    否则 LIKE `%我.%` 里的 `.` 被当字面量，命中 0 条
+    let res = app
+        .clone()
+        .oneshot(auth_get(
+            "/Users/1/Items?IncludeItemTypes=Movie,Series&SearchTerm=Bunny.",
+        ))
+        .await
+        .unwrap();
+    let v = json_body(res).await;
+    assert_eq!(
+        v["TotalRecordCount"], 1,
+        "尾部 '.' 应被剥掉：SearchTerm=Bunny. 仍命中 Big Buck Bunny"
+    );
+    assert_eq!(v["Items"][0]["Name"], "Big Buck Bunny");
+
+    // 5) 无 SearchTerm 的纯 Series 分支仍按旧路径返回全部剧
+    let res = app
+        .clone()
+        .oneshot(auth_get("/Users/1/Items?IncludeItemTypes=Series"))
+        .await
+        .unwrap();
+    let v = json_body(res).await;
+    assert_eq!(
+        v["TotalRecordCount"], 1,
+        "纯 Series 无搜索仍应走原分支返回该剧"
+    );
+    assert_eq!(v["Items"][0]["Name"], "Test Show");
+
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&lib).parent().unwrap());
+}
+
 /// 构建单电影库：库名取自最后一级目录名，电影名取自 strm 文件名（剥离年份）。
 fn make_single_movie_lib(lib_name: &str, movie_name: &str) -> std::path::PathBuf {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
