@@ -57,6 +57,18 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # 🎯 多平台编译缓存：Swatinem/rust-cache 会自动按
+      #   runner.os + matrix.target 生成独立缓存 key，
+      #   不同平台/不同 target 之间互不串扰，同一平台重跑秒起。
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          # 显式让每个 matrix target 各占一份缓存，
+          # 避免 musl 与 msvc 的 target 产物混在一起
+          key: ${{ matrix.target }}
+          save-always: true
+
       - name: Install musl toolchain (Linux)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
