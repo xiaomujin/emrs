@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "emby-proto"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "chrono",
  "serde",
@@ -668,7 +668,7 @@ dependencies = [
 
 [[package]]
 name = "emrs-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "emrs-infra"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "emrs-server"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "emrs-service"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "chrono",
