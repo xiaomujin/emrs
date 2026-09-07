@@ -76,7 +76,7 @@ pub async fn image_ids_batch(db: &Db, relation_ids: &[i64]) -> Result<HashMap<i6
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        "SELECT parent_id, image_type, id FROM item_image \
+        "SELECT parent_id, image_type, id AS image_id FROM item_image \
          WHERE parent_type = 'item' AND parent_id IN ({placeholders}) \
            AND path_url IS NOT NULL \
          ORDER BY id ASC"
